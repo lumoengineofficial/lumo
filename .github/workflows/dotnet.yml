@@ -8,6 +8,7 @@ on:
     branches: [ "master" ]
   pull_request:
     branches: [ "master" ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -19,10 +20,10 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: 8.0.x
+        dotnet-version: 11.0.100-rc.1.26425.128
     - name: Restore dependencies
-      run: dotnet restore
+      run: dotnet restore LumoEngine.sln
     - name: Build
-      run: dotnet build --no-restore
+      run: dotnet build LumoEngine.sln --no-restore
     - name: Test
-      run: dotnet test --no-build --verbosity normal
+      run: dotnet test tests/Lumo.Tests/Lumo.Tests.csproj --no-build --verbosity normal
