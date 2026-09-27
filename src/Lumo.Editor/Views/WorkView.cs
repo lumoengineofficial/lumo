@@ -113,16 +113,35 @@ public class WorkView : UserControl
         var sceneFile = Path.Combine(_project.Path, "Scenes", "scene.json");
         if (File.Exists(sceneFile))
         {
-            try { _scene = Scene.Load(sceneFile); } catch { }
+            try { _scene = Scene.Load(sceneFile); }
+            catch (Exception ex) { Log($"Scene load failed: {ex.Message}"); }
         }
         _selectedEntity = _scene.AllEntities.FirstOrDefault();
     }
 
     private void SaveProject()
     {
+        var sceneFile = Path.Combine(_project.Path, "Scenes", "scene.json");
+        if (_scene.AllEntities.Count == 0 && File.Exists(sceneFile))
+        {
+            try
+            {
+                int diskCount = Scene.Load(sceneFile).AllEntities.Count;
+                if (diskCount > 0)
+                {
+                    Log($"Scene reload: editor was empty but disk has {diskCount} entities; skipping wipe.");
+                    _scene = Scene.Load(sceneFile);
+                    _selectedEntity = _scene.AllEntities.FirstOrDefault();
+                    ProjectManager.UpdateLastModified(_project.Path);
+                    return;
+                }
+            }
+            catch { }
+        }
+
         var scenesDir = Path.Combine(_project.Path, "Scenes");
         Directory.CreateDirectory(scenesDir);
-        _scene.Save(Path.Combine(scenesDir, "scene.json"));
+        _scene.Save(sceneFile);
         ProjectManager.UpdateLastModified(_project.Path);
     }
 

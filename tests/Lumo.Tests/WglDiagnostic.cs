@@ -24,6 +24,12 @@ public class WglDiagnostic
     [Fact]
     public void Test_ICD_Loading()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            _output.WriteLine("Windows-only diagnostic; skipped.");
+            return;
+        }
+
         _output.WriteLine($"Process is {(Environment.Is64BitProcess ? "64-bit" : "32-bit")}");
         _output.WriteLine($"OS is {(Environment.Is64BitOperatingSystem ? "64-bit" : "32-bit")}");
 
@@ -68,6 +74,12 @@ public class WglDiagnostic
     [Fact]
     public void Test_WGL_Directly()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            _output.WriteLine("Windows-only diagnostic; skipped.");
+            return;
+        }
+
         IntPtr hDC = GetDC(IntPtr.Zero);
         _output.WriteLine($"GetDC = 0x{hDC:X}");
 
