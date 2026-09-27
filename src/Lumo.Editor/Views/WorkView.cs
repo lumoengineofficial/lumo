@@ -910,6 +910,7 @@ public class WorkView : UserControl
         _glViewport = new GlViewport();
         _softwareViewport = new SoftwareViewport();
         _softwareViewport.Mode = _viewMode;
+        _softwareViewport.ProjectRoot = _project.Path;
         _softwareViewport.EntityPicked += entity =>
         {
             _selectedEntity = entity;
@@ -1206,8 +1207,17 @@ public class WorkView : UserControl
         {
             var s = InsSection("Camera");
             InsRow(s, "Primary", e.Camera.IsPrimary ? "Yes" : "No");
-            InsRow(s, "FOV", e.Camera.FieldOfView + "\u00b0");
+            InsRow(s, "FOV", e.Camera.FieldOfView + "°");
             InsRow(s, "Clip", $"{e.Camera.NearPlane} — {e.Camera.FarPlane}");
+            _inspectorContent.Children.Add(s);
+        }
+        if (e.SpriteRenderer != null)
+        {
+            var sp = e.SpriteRenderer;
+            var s = InsSection("Sprite");
+            InsRow(s, "Texture", string.IsNullOrEmpty(sp.SpritePath) ? "None" : sp.SpritePath);
+            InsRow(s, "Size", $"{sp.Width:F2} × {sp.Height:F2}");
+            s.Children.Add(ActionSmall("Import Texture…", () => { _ = ImportTextureAsync(e); }));
             _inspectorContent.Children.Add(s);
         }
 
@@ -1995,6 +2005,56 @@ public class WorkView : UserControl
             ImportObjFile(path);
         }
         catch (Exception ex) { Log($"Import failed: {ex.Message}"); }
+    }
+
+    private async System.Threading.Tasks.Task ImportTextureAsync(Entity e)
+    {
+        try
+        {
+            var topLevel = TopLevel.GetTopLevel(this);
+            if (topLevel == null) { Log("No top level for file dialog."); return; }
+
+            var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Import Texture",
+                AllowMultiple = false,
+                FileTypeFilter =
+                [
+                    new FilePickerFileType("Images") { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.bmp", "*.webp"] },
+                    new FilePickerFileType("All Files") { Patterns = ["*.*"] },
+                ],
+            });
+
+            if (files.Count == 0) { Log("Import cancelled."); return; }
+            var path = files[0].TryGetLocalPath();
+            if (path == null) { Log("Could not resolve file path."); return; }
+
+            var assetsDir = Path.Combine(_project.Path, "Assets");
+            Directory.CreateDirectory(assetsDir);
+            var dest = Path.Combine(assetsDir, Path.GetFileName(path));
+            if (!string.Equals(Path.GetFullPath(path), Path.GetFullPath(dest), StringComparison.OrdinalIgnoreCase))
+            {
+                if (File.Exists(dest))
+                    dest = UniqueAssetPath(assetsDir, Path.GetFileNameWithoutExtension(path), Path.GetExtension(path));
+                File.Copy(path, dest);
+            }
+
+            e.SpriteRenderer ??= new SpriteRendererComponent();
+            e.SpriteRenderer.SpritePath = "Assets/" + Path.GetFileName(dest);
+            SaveProject();
+            RefreshInspector();
+            _softwareViewport?.InvalidateVisual();
+            Log($"Texture set: {e.SpriteRenderer.SpritePath}");
+        }
+        catch (Exception ex) { Log($"Texture import failed: {ex.Message}"); }
+    }
+
+    private static string UniqueAssetPath(string dir, string baseName, string ext)
+    {
+        string p = Path.Combine(dir, baseName + ext);
+        for (int i = 1; File.Exists(p); i++)
+            p = Path.Combine(dir, $"{baseName}_{i}{ext}");
+        return p;
     }
 
     private void ImportObjFile(string path)

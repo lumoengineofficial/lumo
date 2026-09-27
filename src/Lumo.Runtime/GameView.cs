@@ -2,11 +2,14 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Lumo.Engine.Assets;
 using Lumo.Engine.Input;
+using Lumo.Engine.Rendering.Software;
 using Lumo.Engine.Scene;
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.InteropServices;
 using Mesh = Lumo.Engine.Rendering.Abstractions.Mesh;
 using Key = Avalonia.Input.Key;
 using LumoKey = Lumo.Engine.Input.Key;
@@ -214,7 +217,7 @@ public sealed class GameView : Control
             }
             else if (entity.SpriteRenderer is { IsVisible: true } sp)
             {
-                DrawSprite(ctx, entity, sp, view, proj, w, h);
+                DrawSprite(ctx, entity, sp, _runtime.ProjectDir, view, proj, w, h);
             }
         }
 
@@ -232,7 +235,7 @@ public sealed class GameView : Control
         ctx.DrawText(ft, new Point((w - ft.Width) / 2, (h - ft.Height) / 2));
     }
 
-    private static void DrawSprite(DrawingContext ctx, Entity entity, SpriteRendererComponent sp, Matrix4x4 view, Matrix4x4 proj, int w, int h)
+    private static void DrawSprite(DrawingContext ctx, Entity entity, SpriteRendererComponent sp, string? projectRoot, Matrix4x4 view, Matrix4x4 proj, int w, int h)
     {
         float hw = sp.Width * 0.5f, hh = sp.Height * 0.5f;
         var c = entity.Transform.Position;
@@ -241,6 +244,23 @@ public sealed class GameView : Control
         var d = Project(c + new Vector3(hw, hh, 0), view, proj, w, h);
         var e2 = Project(c + new Vector3(-hw, hh, 0), view, proj, w, h);
         if (a.X < -9000) return;
+
+        if (!string.IsNullOrEmpty(sp.SpritePath) && projectRoot != null)
+        {
+            var tex = Texture2D.Load(Path.Combine(projectRoot, sp.SpritePath));
+            if (tex != null)
+            {
+                var quad = TexturedQuad.Rasterize(tex,
+                    new Vector2(a.X, a.Y), new Vector2(b.X, b.Y),
+                    new Vector2(d.X, d.Y), new Vector2(e2.X, e2.Y), sp.Color);
+                if (quad != null)
+                {
+                    var img = MakeQuadBitmap(quad);
+                    ctx.DrawImage(img, new Rect(quad.X, quad.Y, quad.Width, quad.Height));
+                    return;
+                }
+            }
+        }
 
         var geo = new StreamGeometry();
         using (var gc = geo.Open())
@@ -257,6 +277,20 @@ public sealed class GameView : Control
             (byte)Math.Clamp((int)(sc.Y * 255f), 0, 255),
             (byte)Math.Clamp((int)(sc.Z * 255f), 0, 255));
         ctx.DrawGeometry(new SolidColorBrush(fill), null, geo);
+    }
+
+    private static WriteableBitmap MakeQuadBitmap(QuadRaster quad)
+    {
+        var bmp = new WriteableBitmap(
+            new PixelSize(quad.Width, quad.Height), new Avalonia.Vector(96, 96));
+        using var fb = bmp.Lock();
+        int rowBytes = quad.Width * 4;
+        for (int y = 0; y < quad.Height; y++)
+        {
+            Marshal.Copy(quad.Pixels, y * rowBytes,
+                (IntPtr)(fb.Address + (long)y * fb.RowBytes), rowBytes);
+        }
+        return bmp;
     }
 
     private static void DrawCube(DrawingContext ctx, Vector3 center, float size, Matrix4x4 view, Matrix4x4 proj, int w, int h)

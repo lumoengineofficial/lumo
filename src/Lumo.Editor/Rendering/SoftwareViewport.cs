@@ -2,11 +2,14 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Lumo.Engine.Assets;
+using Lumo.Engine.Rendering.Software;
 using Lumo.Engine.Scene;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Runtime.InteropServices;
 using Mesh = Lumo.Engine.Rendering.Abstractions.Mesh;
 
 namespace Lumo.Editor.Rendering;
@@ -30,6 +33,9 @@ public class SoftwareViewport : Control
     private readonly List<(Vector3 pos, Vector4 color)> _markers = [];
 
     public string ModeLabel { get; set; } = "Software (CPU)";
+
+    /// <summary>Project root used to resolve relative SpritePath textures.</summary>
+    public string? ProjectRoot { get; set; }
 
     public ViewportMode Mode { get; set; } = ViewportMode.Scene;
 
@@ -588,6 +594,25 @@ public class SoftwareViewport : Control
         var e2 = Project(c + new Vector3(-hw, hh, 0), view, proj, w, h);
         if (a.X < -9000) return;
 
+        if (!string.IsNullOrEmpty(sp.SpritePath) && ProjectRoot != null)
+        {
+            var tex = Texture2D.Load(Path.Combine(ProjectRoot, sp.SpritePath));
+            if (tex != null)
+            {
+                var quad = TexturedQuad.Rasterize(tex,
+                    new Vector2(a.X, a.Y), new Vector2(b.X, b.Y),
+                    new Vector2(d.X, d.Y), new Vector2(e2.X, e2.Y), sp.Color);
+                if (quad != null)
+                {
+                    // Not disposed here: Avalonia may still reference the bitmap
+                    // when the draw op is executed; the GC frees it safely.
+                    var img = MakeQuadBitmap(quad);
+                    ctx.DrawImage(img, new Rect(quad.X, quad.Y, quad.Width, quad.Height));
+                    return;
+                }
+            }
+        }
+
         var geo = new StreamGeometry();
         using (var gc = geo.Open())
         {
@@ -610,6 +635,20 @@ public class SoftwareViewport : Control
             new SolidColorBrush(fill),
             new Pen(new SolidColorBrush(stroke), 1.4),
             geo);
+    }
+
+    private static WriteableBitmap MakeQuadBitmap(QuadRaster quad)
+    {
+        var bmp = new WriteableBitmap(
+            new PixelSize(quad.Width, quad.Height), new Avalonia.Vector(96, 96));
+        using var fb = bmp.Lock();
+        int rowBytes = quad.Width * 4;
+        for (int y = 0; y < quad.Height; y++)
+        {
+            Marshal.Copy(quad.Pixels, y * rowBytes,
+                (IntPtr)(fb.Address + (long)y * fb.RowBytes), rowBytes);
+        }
+        return bmp;
     }
 
     private void DrawSelection(DrawingContext ctx, Matrix4x4 view, Matrix4x4 proj, int w, int h)
