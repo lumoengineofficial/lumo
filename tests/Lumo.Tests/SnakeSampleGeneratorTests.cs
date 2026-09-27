@@ -264,6 +264,17 @@ public class SnakeSampleGeneratorTests
         KeyBlock("Left", "dirX", "1", "-1", "0", 3620);
         KeyBlock("Right", "dirX", "-1", "1", "0", 3980);
 
+        // ---- HUD: score, refreshed every tick (own event node so the main
+        //      tick chain's single-exec fan-out stays untouched) -----------
+        VSNode evTickHud = g.N("event.tick", 40, 2350);
+        VSNode concatScore = g.N("value.concat", 300, 2350, ("a", "Score: "));
+        VSNode hudScore = g.N("hud.text", 560, 2350,
+            ("id", "score"), ("x", "0.03"), ("y", "0.03"), ("size", "28"),
+            ("r", "1"), ("g", "0.95"), ("b", "0.3"));
+        g.C(evTickHud, "exec", hudScore, "in");
+        g.C(getScore, "value", concatScore, "b");
+        g.C(concatScore, "result", hudScore, "text");
+
         return g.Graph;
     }
 

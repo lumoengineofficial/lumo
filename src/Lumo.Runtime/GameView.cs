@@ -7,6 +7,7 @@ using Lumo.Engine.Assets;
 using Lumo.Engine.Input;
 using Lumo.Engine.Rendering.Software;
 using Lumo.Engine.Scene;
+using Lumo.Engine.VisualScripting;
 using System.Globalization;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -221,10 +222,27 @@ public sealed class GameView : Control
             }
         }
 
+        foreach (var entry in _runtime.Hud.Entries)
+            DrawHudEntry(ctx, entry, w, h);
+
         if (_runtime.LoadError != null)
             DrawOverlayText(ctx, _runtime.LoadError, w, h, Color.Parse("#ff8080"));
         else if (scene.AllEntities.Count == 0)
             DrawOverlayText(ctx, "No scene loaded.", w, h, Color.Parse("#666677"));
+    }
+
+    private static void DrawHudEntry(DrawingContext ctx, HudEntry entry, int w, int h)
+    {
+        if (string.IsNullOrEmpty(entry.Text)) return;
+        var c = entry.Color;
+        var color = Color.FromRgb(
+            (byte)Math.Clamp((int)(c.X * 255f), 0, 255),
+            (byte)Math.Clamp((int)(c.Y * 255f), 0, 255),
+            (byte)Math.Clamp((int)(c.Z * 255f), 0, 255));
+        var ft = new FormattedText(
+            entry.Text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+            new Typeface("Segoe UI", FontStyle.Normal, FontWeight.Bold), entry.Size, new SolidColorBrush(color));
+        ctx.DrawText(ft, new Point(entry.X * w, entry.Y * h));
     }
 
     private static void DrawOverlayText(DrawingContext ctx, string text, int w, int h, Color color)

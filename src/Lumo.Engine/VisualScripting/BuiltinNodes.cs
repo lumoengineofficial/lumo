@@ -46,8 +46,74 @@ public sealed class EventKeyNode : EventNode
     {
         string raw = ctx.Get<string>(this, "key");
         if (ctx.Input is not null && Enum.TryParse<Key>(raw, true, out Key key) && ctx.Input.IsKeyJustPressed(key))
-            ctx.Emit("exec");
+        ctx.Emit("exec");
     }
+}
+
+// ---------------------------------------------------------------- HUD
+
+[GraphNode("hud.text", "HUD Text", "HUD", "Shows text on screen; x/y are 0..1 fractions, size is pixels.")]
+public sealed class HudTextNode : VSNode
+{
+    public HudTextNode()
+    {
+        ExecIn();
+        ExecOut("exec");
+        DataIn("id", PinDataType.String, "hud");
+        DataIn("text", PinDataType.Any, "Text");
+        DataIn("x", PinDataType.Float, "0.05");
+        DataIn("y", PinDataType.Float, "0.05");
+        DataIn("size", PinDataType.Float, "24");
+        DataIn("r", PinDataType.Float, "1");
+        DataIn("g", PinDataType.Float, "1");
+        DataIn("b", PinDataType.Float, "1");
+    }
+
+    public override void Execute(GraphContext ctx)
+    {
+        ctx.Hud.Set(
+            ctx.Get<string>(this, "id"),
+            ctx.Get<string>(this, "text"),
+            ctx.Get<float>(this, "x"),
+            ctx.Get<float>(this, "y"),
+            ctx.Get<float>(this, "size"),
+            new Vector3(
+                ctx.Get<float>(this, "r"),
+                ctx.Get<float>(this, "g"),
+                ctx.Get<float>(this, "b")));
+        ctx.Emit("exec");
+    }
+}
+
+[GraphNode("hud.remove", "Remove HUD Text", "HUD", "Removes a HUD entry by id.")]
+public sealed class HudRemoveNode : VSNode
+{
+    public HudRemoveNode()
+    {
+        ExecIn();
+        ExecOut("exec");
+        DataIn("id", PinDataType.String, "hud");
+    }
+
+    public override void Execute(GraphContext ctx)
+    {
+        ctx.Hud.Remove(ctx.Get<string>(this, "id"));
+        ctx.Emit("exec");
+    }
+}
+
+[GraphNode("value.concat", "Concat", "Values", "Joins two values as text.")]
+public sealed class ConcatNode : VSNode
+{
+    public ConcatNode()
+    {
+        DataIn("a", PinDataType.Any, "Hello ");
+        DataIn("b", PinDataType.Any, "World");
+        DataOut("result", PinDataType.String);
+    }
+
+    public override object? EvaluateOutput(GraphContext ctx, string pin) =>
+        ctx.Get<string>(this, "a") + ctx.Get<string>(this, "b");
 }
 
 // ---------------------------------------------------------------- Flow

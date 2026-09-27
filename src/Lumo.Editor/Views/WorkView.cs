@@ -73,20 +73,17 @@ public class WorkView : UserControl
     private bool _showGizmos = true;
     private bool _showStats = true;
     private readonly List<string> _logMessages = [];
-    private string? _playSnapshot;
     private string? _currentScriptPath;
     private TextBox? _scriptEditor;
     private TextBlock? _scriptErrorText;
     private TextBlock? _profilerStats;
-    private LumoInput? _playInput;
     private readonly ScriptHost _scriptHost = new();
-    private GraphInterpreter? _graphRunner;
+    private GamePlayWindow? _gameWindow;
     private GraphsPanel? _graphsPanel;
     private MenuFlyout? _projectFlyout;
     private MenuFlyout? _editFlyout;
     private bool _exporting;
     private readonly HistoryStack _sceneHistory = new();
-    private readonly HashSet<string> _vsLoggedErrors = new();
 
     public WorkView(ProjectInfo project, Action<string?> onNavigateHome, Action onClose)
     {
@@ -166,32 +163,10 @@ public class WorkView : UserControl
         timer.Start();
 
         var renderTimer = new Timer(16.0);
-        renderTimer.Elapsed += (_, _) =>
+            renderTimer.Elapsed += (_, _) =>
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
                 float dt = _engine.Tick();
-
-                if (_isPlaying)
-                {
-                    try
-                    {
-                        // Graphs tick before BeginFrame so key presses since the
-                        // last frame are still visible to event nodes.
-                        _graphRunner?.Tick(dt);
-                        if (_graphRunner != null)
-                        {
-                            _graphsPanel?.ShowDebug(_graphRunner.ActiveNodes);
-                            foreach (string err in _graphRunner.Errors)
-                            {
-                                if (_vsLoggedErrors.Add(err))
-                                    Log($"VS: {err}");
-                            }
-                        }
-                    }
-                    catch (Exception ex) { Log($"VS tick failed: {ex.Message}"); }
-                    _playInput?.BeginFrame();
-                    _scriptHost.Update(dt, (float)_engine.Time.ElapsedTime);
-                }
 
                 if (_glViewport != null && _glViewport.IsVisible && _glViewport.IsReady)
                 {
@@ -217,120 +192,52 @@ public class WorkView : UserControl
 
     private void StartPlay()
     {
-        try { _playSnapshot = _scene.Serialize(); }
-        catch { _playSnapshot = null; }
-
-        var scriptsDir = Path.Combine(_project.Path, "Scripts");
-        Directory.CreateDirectory(scriptsDir);
-        var sources = Directory.GetFiles(scriptsDir, "*.cs", SearchOption.AllDirectories)
-            .Select(File.ReadAllText)
-            .ToList();
-
-        if (sources.Count > 0)
+        if (_gameWindow != null)
         {
-            if (!_scriptHost.Compile(sources))
-            {
-                foreach (var err in _scriptHost.Errors)
-                    Log($"CS: {err}");
-                Log($"Script compile failed ({_scriptHost.Errors.Count} error(s)). Fix and retry.");
-                _playSnapshot = null;
-                return;
-            }
-
-            _playInput = new LumoInput();
-            _scriptHost.Input = _playInput;
-            _scriptHost.Bind(_scene);
-
-            if (_scriptHost.Errors.Count > 0)
-                foreach (var err in _scriptHost.Errors)
-                    Log(err);
+            _gameWindow.Activate();
+            return;
         }
 
-        _playInput ??= new LumoInput();
-
-        // Load visual scripting graphs for this play session.
-        _graphRunner = new GraphInterpreter
-        {
-            Scene = _scene,
-            Input = _playInput,
-            Self = _selectedEntity,
-            BaseDirectory = _project.Path
-        };
-        _graphRunner.MessageLogged += OnScriptMessage;
-        _vsLoggedErrors.Clear();
-        string graphsDir = Path.Combine(_project.Path, "Graphs");
-        int graphCount = 0;
-        if (Directory.Exists(graphsDir))
-        {
-            foreach (string file in Directory.GetFiles(graphsDir, "*.graph.json"))
-            {
-                try
-                {
-                    _graphRunner.AddGraph(VisualGraph.Load(file));
-                    graphCount++;
-                }
-                catch (Exception ex)
-                {
-                    Log($"Graph load failed ({Path.GetFileName(file)}): {ex.Message}");
-                }
-            }
-        }
-        _graphRunner.Start();
-        _graphsPanel?.AttachRunner(_graphRunner);
-
+        try { _graphsPanel?.SaveCurrentGraph(); }
+        catch (Exception ex) { Log($"Graph save failed: {ex.Message}"); }
+        SaveProject();
         _engine.Start();
-        _scriptHost.Start((float)_engine.Time.ElapsedTime);
+
+        _gameWindow = new GamePlayWindow(_project.Path, _project.Name);
+        _gameWindow.LogLine += Log;
+        _gameWindow.Stopped += OnGameWindowStopped;
+        _gameWindow.Show();
+        _graphsPanel?.AttachRunner(_gameWindow.Runtime.Graphs);
         _isPlaying = true;
-        SetTopMode("Game");
-        if (sources.Count > 0)
-            Log($"Playing — {sources.Count} script file(s), {_scriptHost.InstanceCount} instance(s), {graphCount} graph(s).");
-        else if (graphCount > 0)
-            Log($"Playing — {graphCount} visual graph(s).");
-        else
-            Log("Playing (no scripts in Scripts/, no graphs in Graphs/).");
+        Log("Playing — game window opened (editor stays in edit mode).");
+    }
+
+    private void OnGameWindowStopped()
+    {
+        _gameWindow = null;
+        _graphsPanel?.AttachRunner(null);
+        _graphsPanel?.ShowDebug([]);
+        _engine.Stop();
+        _isPlaying = false;
+        RefreshPlayButton();
+        Log("Game window closed.");
     }
 
     private void StopPlay()
     {
-        _scriptHost.Stop();
-        if (_graphRunner != null)
+        var w = _gameWindow;
+        _gameWindow = null;
+        if (w != null)
         {
-            foreach (string err in _graphRunner.Errors)
-            {
-                if (_vsLoggedErrors.Add(err))
-                    Log($"VS: {err}");
-            }
-            _graphRunner.MessageLogged -= OnScriptMessage;
-            _graphRunner.Clear();
-            _graphRunner = null;
+            w.LogLine -= Log;
+            w.Stopped -= OnGameWindowStopped;
+            try { w.Close(); } catch { /* already closed */ }
         }
         _graphsPanel?.AttachRunner(null);
         _graphsPanel?.ShowDebug([]);
         _engine.Stop();
         _isPlaying = false;
-
-        if (_playSnapshot != null)
-        {
-            try
-            {
-                var data = JsonSerializer.Deserialize<SceneData>(_playSnapshot,
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                if (data != null)
-                {
-                    _scene = SceneSerializer.Deserialize(data);
-                    if (_selectedEntity != null)
-                        _selectedEntity = _scene.FindById(_selectedEntity.Id);
-                    RefreshHierarchy();
-                    RefreshInspector();
-                }
-            }
-            catch (Exception ex) { Log($"Restore failed: {ex.Message}"); }
-            _playSnapshot = null;
-        }
-
-        _playInput = null;
-        _scriptHost.Input = null;
-        Log("Stopped — scene restored.");
+        Log("Stopped.");
     }
 
     private void RefreshPlayButton()
@@ -852,7 +759,7 @@ public class WorkView : UserControl
             panel.Notify += Log;
             _graphsPanel = panel;
         }
-        _graphsPanel.AttachRunner(_graphRunner);
+        _graphsPanel.AttachRunner(_gameWindow?.Runtime.Graphs);
         return _graphsPanel;
     }
 
@@ -2096,18 +2003,6 @@ public class WorkView : UserControl
             e.Handled = true;
             return;
         }
-
-        if (!_isPlaying || _playInput == null) return;
-        var key = MapKey(e.Key);
-        if (key != LumoKey.Unknown) { _playInput.KeyPressed(key); e.Handled = true; }
-    }
-
-    protected override void OnKeyUp(KeyEventArgs e)
-    {
-        base.OnKeyUp(e);
-        if (_playInput == null) return;
-        var key = MapKey(e.Key);
-        if (key != LumoKey.Unknown) { _playInput.KeyReleased(key); e.Handled = true; }
     }
 
     private static LumoKey MapKey(Key key) => key switch

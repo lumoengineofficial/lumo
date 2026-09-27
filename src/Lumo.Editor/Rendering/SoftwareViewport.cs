@@ -104,11 +104,15 @@ public class SoftwareViewport : Control
             }
             else
             {
-                if (Mode != ViewportMode.Game) EntityPicked?.Invoke(null);
-                _orbiting = true;
+                if (Mode != ViewportMode.Game)
+                {
+                    EntityPicked?.Invoke(null);
+                    _orbiting = true;
+                }
             }
         }
         else if (p.IsMiddleButtonPressed || p.IsRightButtonPressed) _panning = true;
+        e.Pointer.Capture(this);
         e.Handled = true;
     }
 
@@ -117,6 +121,7 @@ public class SoftwareViewport : Control
         _dragEntity = null;
         _orbiting = false;
         _panning = false;
+        if (e.Pointer.Captured == this) e.Pointer.Capture(null);
         e.Handled = true;
     }
 
@@ -311,7 +316,8 @@ public class SoftwareViewport : Control
             if (positive is null) positive = pos;
             else if (positive != pos) return false;
         }
-        return positive is not false;
+        // Consistent winding (either direction) = inside; null = degenerate.
+        return positive.HasValue;
     }
 
     private (Matrix4x4 view, Matrix4x4 proj) GetMatrices(int w, int h)

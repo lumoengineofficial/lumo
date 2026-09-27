@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Lumo.Engine\Lumo.Engine.csproj" />
+    <ProjectReference Include="..\Lumo.Runtime\Lumo.Runtime.csproj" />
   </ItemGroup>
 
   <ItemGroup>

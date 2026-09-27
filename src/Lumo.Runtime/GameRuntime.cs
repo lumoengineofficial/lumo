@@ -32,6 +32,14 @@ public sealed class GameRuntime : IDisposable
     public IReadOnlyList<string> GraphErrors => _graphs?.Errors ?? [];
     public bool IsRunning => _started;
 
+    /// <summary>Graph interpreter for live debug attach (null before Start).</summary>
+    public GraphInterpreter? Graphs => _graphs;
+
+    private static readonly HudLayer _emptyHud = new();
+
+    /// <summary>Screen-space HUD entries drawn by the game view.</summary>
+    public HudLayer Hud => _graphs?.Hud ?? _emptyHud;
+
     /// <summary>Log lines from graphs/scripts (also written to the console).</summary>
     public event Action<string>? MessageLogged;
 

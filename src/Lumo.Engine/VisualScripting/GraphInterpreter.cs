@@ -33,6 +33,7 @@ public sealed class GraphContext
 {
     internal GraphInterpreter Interpreter = null!;
 
+    public HudLayer Hud => Interpreter.Hud;
     public VisualGraph Graph { get; internal set; } = null!;
     public Entity? Self { get; internal set; }
     public GameScene? Scene { get; internal set; }
@@ -115,6 +116,7 @@ public sealed class GraphInterpreter
     public string? BaseDirectory { get; set; }
 
     public Blackboard Blackboard { get; } = Blackboard.Shared;
+    public HudLayer Hud { get; } = new();
     public float Time { get; private set; }
 
     /// <summary>Node ids executed during the last dispatch (debug overlay).</summary>
@@ -146,6 +148,7 @@ public sealed class GraphInterpreter
         Time = 0f;
         _lastDelta = 0f;
         Blackboard.Clear();
+        Hud.ClearAll();
         foreach ((VisualGraph graph, RunState state) in _states)
         {
             state.Locals.Clear();
