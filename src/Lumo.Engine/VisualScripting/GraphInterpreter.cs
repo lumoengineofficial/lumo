@@ -110,6 +110,10 @@ public sealed class GraphInterpreter
     public Entity? Self { get; set; }
     public GameScene? Scene { get; set; }
     public InputState? Input { get; set; }
+
+    /// <summary>Base folder for relative paths (project dir); hosts set this.</summary>
+    public string? BaseDirectory { get; set; }
+
     public Blackboard Blackboard { get; } = Blackboard.Shared;
     public float Time { get; private set; }
 

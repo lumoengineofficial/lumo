@@ -84,12 +84,16 @@ public sealed class GraphCanvas : Control
         InvalidateVisual();
     }
 
+    /// <summary>Invoked immediately before a graph mutation (undo snapshot point).</summary>
+    public Action? BeforeGraphEdit;
+
     /// <summary>Places a new node near the viewport center and selects it.</summary>
     public VSNode AddNode(string typeId)
     {
         if (_graph is null || !NodeRegistry.TryGet(typeId, out var def))
             throw new InvalidOperationException("No graph loaded or unknown node type.");
 
+        BeforeGraphEdit?.Invoke();
         VSNode node = def.Create();
         Point center = ToWorld(new Point(Bounds.Width / 2, Bounds.Height / 2));
         int offset = _graph.Nodes.Count % 8;
@@ -104,6 +108,8 @@ public sealed class GraphCanvas : Control
     public void DeleteSelection()
     {
         if (_graph is null) return;
+        if (_selectedWire is null && _selectedNode is null) return;
+        BeforeGraphEdit?.Invoke();
         if (_selectedWire is not null)
         {
             _graph.Connections.Remove(_selectedWire);
@@ -281,6 +287,7 @@ public sealed class GraphCanvas : Control
             if (point.Properties.IsLeftButtonPressed && HitNode(world) is VSNode node2)
             {
                 Select(node2);
+                BeforeGraphEdit?.Invoke();
                 _dragNode = node2;
                 _dragOffset = new Point(world.X - node2.X, world.Y - node2.Y);
                 e.Pointer.Capture(this);
@@ -391,6 +398,7 @@ public sealed class GraphCanvas : Control
         Pin? inPin = to.GetPin(toPin);
         if (!GraphValidator.CanConnect(outPin, inPin))
             return false;
+        BeforeGraphEdit?.Invoke();
         _graph.AddConnection(from, fromPin, to, toPin);
         _selectedWire = null;
         GraphEdited?.Invoke();

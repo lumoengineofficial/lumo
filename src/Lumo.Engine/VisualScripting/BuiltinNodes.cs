@@ -518,3 +518,77 @@ public sealed class SetVariableNode : VSNode
         ctx.Emit("exec");
     }
 }
+
+/// <summary>
+/// Writes every blackboard variable to a JSON file (default save.json,
+/// resolved against the interpreter base directory when relative).
+/// </summary>
+[GraphNode("system.save", "Save Game", "Actions", "Writes all blackboard variables to a JSON file.")]
+public sealed class SaveGameStateNode : VSNode
+{
+    public SaveGameStateNode()
+    {
+        ExecIn();
+        ExecOut("exec");
+        DataIn("path", PinDataType.String, "save.json");
+    }
+
+    public override void Execute(GraphContext ctx)
+    {
+        string path = ctx.Get<string>(this, "path");
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            try
+            {
+                string full = Resolve(ctx, path);
+                GameStateStore.Save(full, ctx.Blackboard);
+                ctx.Log($"Game saved: {full}");
+            }
+            catch (Exception ex)
+            {
+                ctx.Log($"Save failed: {ex.Message}");
+            }
+        }
+        ctx.Emit("exec");
+    }
+
+    internal static string Resolve(GraphContext ctx, string path) =>
+        Path.IsPathRooted(path)
+            ? path
+            : Path.Combine(ctx.Interpreter.BaseDirectory ?? Environment.CurrentDirectory, path);
+}
+
+/// <summary>
+/// Loads blackboard variables from a JSON file produced by system.save.
+/// </summary>
+[GraphNode("system.load", "Load Game", "Actions", "Restores blackboard variables from a JSON file.")]
+public sealed class LoadGameStateNode : VSNode
+{
+    public LoadGameStateNode()
+    {
+        ExecIn();
+        ExecOut("exec");
+        DataIn("path", PinDataType.String, "save.json");
+    }
+
+    public override void Execute(GraphContext ctx)
+    {
+        string path = ctx.Get<string>(this, "path");
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            try
+            {
+                string full = SaveGameStateNode.Resolve(ctx, path);
+                Dictionary<string, string> vars = GameStateStore.Load(full);
+                foreach ((string key, string value) in vars)
+                    ctx.Blackboard.Set(key, value);
+                ctx.Log($"Game loaded: {vars.Count} variable(s) from {full}");
+            }
+            catch (Exception ex)
+            {
+                ctx.Log($"Load failed: {ex.Message}");
+            }
+        }
+        ctx.Emit("exec");
+    }
+}

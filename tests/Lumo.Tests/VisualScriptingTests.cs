@@ -5,6 +5,7 @@ using Lumo.Engine.VisualScripting;
 
 namespace Lumo.Tests;
 
+[Collection("Blackboard")]
 public class VisualScriptingTests
 {
     private static VisualGraph NewGraph(string name = "Test") => new() { Name = name };

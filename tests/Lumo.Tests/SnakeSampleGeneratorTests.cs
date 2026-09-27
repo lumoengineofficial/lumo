@@ -14,6 +14,7 @@ namespace Lumo.Tests;
 /// Documents\LumoProjects by the tooling. Every gameplay rule lives in the
 /// graph: movement, steering with reverse-guard, food pickup, wall death.
 /// </summary>
+[Collection("Blackboard")]
 public class SnakeSampleGeneratorTests
 {
     private const float WallX = 3.8f;
@@ -108,16 +109,7 @@ public class SnakeSampleGeneratorTests
         g.C(getPosHead, "position", brkHead, "value");
 
         VSNode findS1 = g.N("entity.find", 40, 1930, ("name", "S1"));
-        VSNode getPosS1 = g.N("entity.getPosition", 280, 1930);
-        VSNode brkS1 = g.N("value.breakVector3", 520, 1930);
-        g.C(findS1, "entity", getPosS1, "entity");
-        g.C(getPosS1, "position", brkS1, "value");
-
         VSNode findS2 = g.N("entity.find", 40, 2110, ("name", "S2"));
-        VSNode getPosS2 = g.N("entity.getPosition", 280, 2110);
-        VSNode brkS2 = g.N("value.breakVector3", 520, 2110);
-        g.C(findS2, "entity", getPosS2, "entity");
-        g.C(getPosS2, "position", brkS2, "value");
 
         VSNode findS3 = g.N("entity.find", 40, 2290, ("name", "S3"));
         VSNode findFood = g.N("entity.find", 40, 2470, ("name", "Food"));
@@ -135,28 +127,8 @@ public class SnakeSampleGeneratorTests
         VSNode branchWall = g.N("flow.branch", 780, 760);
         g.C(branchAlive, "true", branchWall, "in");
 
-        // ---- body shift: S3<-S2, S2<-S1, S1<-head, then head moves --------
-        VSNode setPosS3 = g.N("action.setPosition", 1020, 950);
-        VSNode setPosS2 = g.N("action.setPosition", 1260, 950);
-        VSNode setPosS1 = g.N("action.setPosition", 1500, 950);
+        // ---- head moves after the body is placed (wiring below) ----------
         VSNode translate = g.N("action.translate", 1740, 950);
-
-        g.C(branchWall, "false", setPosS3, "in");
-        g.C(setPosS3, "exec", setPosS2, "in");
-        g.C(setPosS2, "exec", setPosS1, "in");
-        g.C(setPosS1, "exec", translate, "in");
-
-        g.C(findS3, "entity", setPosS3, "target");
-        g.C(brkS2, "x", setPosS3, "x");
-        g.C(brkS2, "y", setPosS3, "y");
-
-        g.C(findS2, "entity", setPosS2, "target");
-        g.C(brkS1, "x", setPosS2, "x");
-        g.C(brkS1, "y", setPosS2, "y");
-
-        g.C(findS1, "entity", setPosS1, "target");
-        g.C(brkHead, "x", setPosS1, "x");
-        g.C(brkHead, "y", setPosS1, "y");
 
         // ---- head step: dir * speed * delta --------------------------------
         VSNode getTime = g.N("value.time", 1020, 1150);
@@ -173,6 +145,39 @@ public class SnakeSampleGeneratorTests
         g.C(findHead, "entity", translate, "target");
         g.C(mulX, "result", translate, "dx");
         g.C(mulY, "result", translate, "dy");
+
+        // ---- body: each segment sits 0.55*k behind the head along dir ----
+        // (chain-follow collapses to speed*dt spacing in continuous movement,
+        //  so the trail is recomputed from the direction each tick.)
+        VSNode setPosS3 = g.N("action.setPosition", 1020, 950);
+        VSNode setPosS2 = g.N("action.setPosition", 1260, 950);
+        VSNode setPosS1 = g.N("action.setPosition", 1500, 950);
+
+        g.C(branchWall, "false", setPosS3, "in");
+        g.C(setPosS3, "exec", setPosS2, "in");
+        g.C(setPosS2, "exec", setPosS1, "in");
+        g.C(setPosS1, "exec", translate, "in");
+
+        void Body(VSNode setPos, VSNode findSeg, string gap, double x, double y)
+        {
+            VSNode mx = g.N("math.multiply", x, y, ("b", gap));
+            VSNode my = g.N("math.multiply", x, y + 140, ("b", gap));
+            VSNode sx = g.N("math.subtract", x + 240, y);
+            VSNode sy = g.N("math.subtract", x + 240, y + 140);
+            g.C(getDirX, "value", mx, "a");
+            g.C(getDirY, "value", my, "a");
+            g.C(brkHead, "x", sx, "a");
+            g.C(mx, "result", sx, "b");
+            g.C(brkHead, "y", sy, "a");
+            g.C(my, "result", sy, "b");
+            g.C(findSeg, "entity", setPos, "target");
+            g.C(sx, "result", setPos, "x");
+            g.C(sy, "result", setPos, "y");
+        }
+
+        Body(setPosS3, findS3, "1.65", 800, 1930);
+        Body(setPosS2, findS2, "1.1", 1280, 1930);
+        Body(setPosS1, findS1, "0.55", 1760, 1930);
 
         // ---- eat check (after the move) ------------------------------------
         VSNode branchEat = g.N("flow.branch", 1980, 870);
@@ -340,6 +345,11 @@ public class SnakeSampleGeneratorTests
         Assert.True(headX > startHead.X, "head should move +x");
         Assert.True(s1X > startS1.X, "S1 should follow head");
         Assert.True(headX > s1X, "head should lead the body");
+        // body derives from the pre-move head (wall predict memoizes it first),
+        // so spacing carries a one-tick lag of speed*dt (~0.026) — invisible.
+        Assert.InRange(headX - s1X, 0.55f, 0.55f + 1.6f / 60f + 0.001f);
+        float s3X = scene.FindByName("S3")!.Transform.Position.X;
+        Assert.InRange(headX - s3X, 1.65f, 1.65f + 1.6f / 60f + 0.001f);
         Assert.Empty(interp.Errors);
     }
 

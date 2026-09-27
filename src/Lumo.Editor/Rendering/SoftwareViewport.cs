@@ -42,6 +42,7 @@ public class SoftwareViewport : Control
 
     /// <summary>Raised while a picked entity is being dragged.</summary>
     public event Action<Entity>? EntityMoved;
+    public event Action? TransformDragStarted;
 
     /// <summary>When this returns false, clicks still select but do not move entities.</summary>
     public Func<bool>? CanEditTransform;
@@ -91,6 +92,7 @@ public class SoftwareViewport : Control
                     {
                         _dragEntity = hit;
                         _dragOffset = hit.Transform.Position - w;
+                        TransformDragStarted?.Invoke();
                     }
                 }
             }

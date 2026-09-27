@@ -91,15 +91,20 @@ public sealed class Scene
     /// Load a scene from JSON.
     /// </summary>
     public static Scene Load(string path)
+        => Deserialize(File.ReadAllText(path));
+
+    /// <summary>
+    /// Deserialize a scene from JSON text (used by load and undo/redo).
+    /// </summary>
+    public static Scene Deserialize(string json)
     {
-        string json = File.ReadAllText(path);
         var options = new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true
         };
         var data = JsonSerializer.Deserialize<SceneData>(json, options);
         if (data == null)
-            throw new InvalidOperationException($"Failed to deserialize scene from {path}");
+            throw new InvalidOperationException("Failed to deserialize scene");
 
         return SceneSerializer.Deserialize(data);
     }

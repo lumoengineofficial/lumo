@@ -18,6 +18,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Lumo.Engine\Lumo.Engine.csproj" />
+    <ProjectReference Include="..\..\src\Lumo.Editor\Lumo.Editor.csproj" />
+    <ProjectReference Include="..\..\src\Lumo.Runtime\Lumo.Runtime.csproj" />
   </ItemGroup>
 
   <ItemGroup>

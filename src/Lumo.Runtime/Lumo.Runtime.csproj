@@ -7,10 +7,18 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Lumo.Runtime</RootNamespace>
     <AssemblyName>Lumo.Runtime</AssemblyName>
+    <NoWarn>NU1903</NoWarn>
+    <AvaloniaUseDownoadedNativeAssets>true</AvaloniaUseDownoadedNativeAssets>
+    <AvaloniaBuildServicesDisabled>true</AvaloniaBuildServicesDisabled>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Lumo.Engine\Lumo.Engine.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.2.3" />
   </ItemGroup>
 
 </Project>

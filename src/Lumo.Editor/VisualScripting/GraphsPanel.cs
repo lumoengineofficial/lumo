@@ -6,6 +6,7 @@ using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Lumo.Editor.Editing;
 using Lumo.Editor.Ui;
 using Lumo.Engine.VisualScripting;
 
@@ -35,6 +36,7 @@ public sealed class GraphsPanel : UserControl
     private VisualGraph? _current;
     private string? _currentFile;
     private bool _dirty;
+    private readonly HistoryStack _graphHistory = new();
 
     // palette grouping: category headers + selectable node rows
     private sealed record PaletteHeader(string Category);
@@ -51,6 +53,7 @@ public sealed class GraphsPanel : UserControl
         _allDefs = NodeRegistry.All.ToList();
         Width = double.NaN;
         BuildUi();
+        _canvas.BeforeGraphEdit = PushGraphUndo;
         RefreshFileList();
 
         if (_files.Count == 0)
@@ -64,6 +67,43 @@ public sealed class GraphsPanel : UserControl
     public void AttachRunner(GraphInterpreter? runner) => _runner = runner;
 
     public void ShowDebug(IReadOnlyCollection<string> activeNodeIds) => _canvas.SetActiveNodes(activeNodeIds);
+
+    // ------------------------------------------------------------ undo/redo
+
+    private void PushGraphUndo()
+    {
+        if (_current is null || _currentFile is null) return;
+        _graphHistory.Push(_current.ToJson());
+    }
+
+    private void RestoreGraph(string json)
+    {
+        var graph = VisualGraph.FromJson(json);
+        _current = graph;
+        _canvas.Graph = graph;
+        _canvas.ClearSelection();
+        _dirty = true;
+        _dirtyMark.Text = "modified";
+        RefreshProps();
+    }
+
+    public void UndoGraph()
+    {
+        if (_current is null || _currentFile is null) { Notify?.Invoke("Graphs: nothing to undo."); return; }
+        string? previous = _graphHistory.Undo(_current.ToJson());
+        if (previous is null) { Notify?.Invoke("Graphs: nothing to undo."); return; }
+        try { RestoreGraph(previous); Notify?.Invoke("Graphs: undo."); }
+        catch (Exception ex) { Notify?.Invoke($"Graphs: undo failed: {ex.Message}"); }
+    }
+
+    public void RedoGraph()
+    {
+        if (_current is null || _currentFile is null) { Notify?.Invoke("Graphs: nothing to redo."); return; }
+        string? next = _graphHistory.Redo(_current.ToJson());
+        if (next is null) { Notify?.Invoke("Graphs: nothing to redo."); return; }
+        try { RestoreGraph(next); Notify?.Invoke("Graphs: redo."); }
+        catch (Exception ex) { Notify?.Invoke($"Graphs: redo failed: {ex.Message}"); }
+    }
 
     // ------------------------------------------------------------ files
 
@@ -108,6 +148,7 @@ public sealed class GraphsPanel : UserControl
             _currentFile = name;
             _dirty = false;
             _canvas.Graph = graph;
+            _graphHistory.Clear();
             _fileList.SelectedIndex = _files.IndexOf(name);
             RefreshProps();
         }
@@ -116,6 +157,8 @@ public sealed class GraphsPanel : UserControl
             Notify?.Invoke($"Graphs: failed to open {name}: {ex.Message}");
         }
     }
+
+    public void SaveCurrentGraph() => SaveGraph();
 
     private void SaveGraph()
     {
@@ -531,6 +574,7 @@ public sealed class GraphsPanel : UserControl
             BorderBrush = UiTheme.B(UiTheme.Border),
             Padding = new Thickness(6, 2)
         };
+        box.GotFocus += (_, _) => PushGraphUndo();
         box.TextChanged += (_, _) =>
         {
             node.Values[pin.Name] = box.Text ?? "";

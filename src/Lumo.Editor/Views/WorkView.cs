@@ -6,6 +6,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
+using Lumo.Editor.Editing;
 using Lumo.Editor.Rendering;
 using Lumo.Editor.Ui;
 using Lumo.Editor.VisualScripting;
@@ -17,6 +18,7 @@ using Lumo.Engine.Scripting;
 using Lumo.Engine.VisualScripting;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -80,6 +82,10 @@ public class WorkView : UserControl
     private readonly ScriptHost _scriptHost = new();
     private GraphInterpreter? _graphRunner;
     private GraphsPanel? _graphsPanel;
+    private MenuFlyout? _projectFlyout;
+    private MenuFlyout? _editFlyout;
+    private bool _exporting;
+    private readonly HistoryStack _sceneHistory = new();
     private readonly HashSet<string> _vsLoggedErrors = new();
 
     public WorkView(ProjectInfo project, Action<string?> onNavigateHome, Action onClose)
@@ -228,7 +234,8 @@ public class WorkView : UserControl
         {
             Scene = _scene,
             Input = _playInput,
-            Self = _selectedEntity
+            Self = _selectedEntity,
+            BaseDirectory = _project.Path
         };
         _graphRunner.MessageLogged += OnScriptMessage;
         _vsLoggedErrors.Clear();
@@ -345,6 +352,28 @@ public class WorkView : UserControl
     // ---------- Top bar: menu + mode tabs + playback ----------
     private Control BuildTopBar()
     {
+        var projectButton = new Button
+        {
+            Content = UiTheme.Txt("Project", 12, UiTheme.Dim),
+            Background = UiTheme.B(Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(9, 6),
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        projectButton.Click += (_, _) => _projectFlyout?.ShowAt(projectButton);
+        _projectFlyout = BuildProjectMenu();
+
+        var editButton = new Button
+        {
+            Content = UiTheme.Txt("Edit", 12, UiTheme.Dim),
+            Background = UiTheme.B(Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(9, 6),
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        editButton.Click += (_, _) => _editFlyout?.ShowAt(editButton);
+        _editFlyout = BuildEditMenu();
+
         var menu = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -354,7 +383,8 @@ public class WorkView : UserControl
             Children =
             {
                 MenuLabel("Scene", NewScene),
-                MenuLabel("Project", BuildProject),
+                projectButton,
+                editButton,
                 MenuLabel("Graphs", () => SetTopMode("Graphs")),
                 MenuLabel("Debug", () => { _bottomTab = "Debugger"; RebuildBottom(); }),
                 MenuLabel("Editor", OpenSettings),
@@ -416,7 +446,7 @@ public class WorkView : UserControl
                 _fpsText,
                 _playButton,
                 stopButton,
-                UiTheme.IconBtn(Icons.Rocket, BuildProject, 15),
+                UiTheme.IconBtn(Icons.Rocket, ExportStandalone, 15),
                 UiTheme.IconBtn(Icons.Gear, OpenSettings, 15),
             }
         };
@@ -869,6 +899,7 @@ public class WorkView : UserControl
             if (entity != null) Log($"Selected {entity.Name} (viewport).");
         };
         _softwareViewport.EntityMoved += _ => RefreshInspector();
+        _softwareViewport.TransformDragStarted += () => PushSceneUndo();
         _softwareViewport.CanEditTransform = () => !_isPlaying;
 
         _viewportPanel = new Panel { Background = UiTheme.B(Color.Parse("#0b1020")) };
@@ -1547,6 +1578,7 @@ public class WorkView : UserControl
     {
         if (_isPlaying) { Log("Stop play mode first."); return; }
         _scene = new SceneType { Name = _project.Name };
+        _sceneHistory.Clear();
         _selectedEntity = null;
         RefreshHierarchy();
         RefreshInspector();
@@ -1578,9 +1610,226 @@ public class WorkView : UserControl
         Log($"Settings — {EngineConstants.Name} v{EngineConstants.Version} | Renderer: {(_glViewport != null && _glViewport.IsReady ? "OpenGL" : "Software")} | Project: {_project.Path}");
     }
 
+    // ---------- Export (publish standalone game) ----------
+    private MenuFlyout BuildProjectMenu()
+    {
+        var saveItem = new MenuItem { Header = "Save Project" };
+        saveItem.Click += (_, _) => SaveProject();
+        var buildItem = new MenuItem { Header = "Build Scripts" };
+        buildItem.Click += (_, _) => BuildProject();
+        var exportItem = new MenuItem { Header = "Export Standalone (win-x64)..." };
+        exportItem.Click += (_, _) => ExportStandalone();
+        return new MenuFlyout { ItemsSource = new object[] { saveItem, buildItem, new Separator(), exportItem } };
+    }
+
+    private MenuFlyout BuildEditMenu()
+    {
+        var undoItem = new MenuItem { Header = "Undo    Ctrl+Z" };
+        undoItem.Click += (_, _) => RouteUndo();
+        var redoItem = new MenuItem { Header = "Redo    Ctrl+Y" };
+        redoItem.Click += (_, _) => RouteRedo();
+        return new MenuFlyout { ItemsSource = new object[] { undoItem, redoItem } };
+    }
+
+    // ---------- Undo / redo ----------
+    private void PushSceneUndo()
+    {
+        if (_isPlaying) return;
+        try { _sceneHistory.Push(_scene.Serialize()); }
+        catch (Exception ex) { Log($"Undo snapshot failed: {ex.Message}"); }
+    }
+
+    private void RouteUndo()
+    {
+        if (_topMode == "Graphs")
+            _graphsPanel?.UndoGraph();
+        else
+            UndoScene();
+    }
+
+    private void RouteRedo()
+    {
+        if (_topMode == "Graphs")
+            _graphsPanel?.RedoGraph();
+        else
+            RedoScene();
+    }
+
+    private void UndoScene()
+    {
+        if (_isPlaying) { Log("Stop play mode first."); return; }
+        string? previous = _sceneHistory.Undo(_scene.Serialize());
+        if (previous is null) { Log("Nothing to undo."); return; }
+        ApplySceneJson(previous);
+        Log("Undo.");
+    }
+
+    private void RedoScene()
+    {
+        if (_isPlaying) { Log("Stop play mode first."); return; }
+        string? next = _sceneHistory.Redo(_scene.Serialize());
+        if (next is null) { Log("Nothing to redo."); return; }
+        ApplySceneJson(next);
+        Log("Redo.");
+    }
+
+    private void ApplySceneJson(string json)
+    {
+        try
+        {
+            _scene = SceneType.Deserialize(json);
+            _selectedEntity = null;
+            RefreshHierarchy();
+            RefreshInspector();
+        }
+        catch (Exception ex) { Log($"Undo/redo failed: {ex.Message}"); }
+    }
+
+    private async void ExportStandalone()
+    {
+        if (_exporting) { Log("Export already running."); return; }
+
+        string? runtimeProj = FindRuntimeProject();
+        if (runtimeProj == null)
+        {
+            Log("Export failed: Lumo.Runtime project not found (dev layout required).");
+            return;
+        }
+        string? dotnet = FindDotnet();
+        if (dotnet == null)
+        {
+            Log("Export failed: dotnet SDK not found.");
+            return;
+        }
+
+        _exporting = true;
+        try
+        {
+            SaveProject();
+            _graphsPanel?.SaveCurrentGraph();
+
+            string safe = new string(_project.Name.Where(char.IsLetterOrDigit).ToArray());
+            if (safe.Length == 0) safe = "Game";
+            string outDir = Path.Combine(_project.Path, "Builds", safe + "-win-x64");
+            Log($"Export: publishing Lumo.Runtime → {outDir}");
+            if (Directory.Exists(outDir)) Directory.Delete(outDir, true);
+            Directory.CreateDirectory(outDir);
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = dotnet,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            psi.ArgumentList.Add("publish");
+            psi.ArgumentList.Add(runtimeProj);
+            psi.ArgumentList.Add("-c"); psi.ArgumentList.Add("Release");
+            psi.ArgumentList.Add("-r"); psi.ArgumentList.Add("win-x64");
+            psi.ArgumentList.Add("--self-contained"); psi.ArgumentList.Add("true");
+            psi.ArgumentList.Add("-o"); psi.ArgumentList.Add(outDir);
+            psi.ArgumentList.Add("--nologo");
+
+            using var proc = Process.Start(psi);
+            if (proc == null) { Log("Export failed: could not start dotnet."); return; }
+
+            int printed = 0;
+            void HandleLine(string? line)
+            {
+                if (line == null) return;
+                int n = Interlocked.Increment(ref printed);
+                bool important = line.Contains("error", StringComparison.OrdinalIgnoreCase)
+                              || line.Contains("succeeded", StringComparison.OrdinalIgnoreCase)
+                              || line.Contains("warning", StringComparison.OrdinalIgnoreCase);
+                if (n > 40 && !important) return;
+                string text = line;
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => Log($"[pub] {text}"));
+            }
+
+            proc.OutputDataReceived += (_, e) => HandleLine(e.Data);
+            proc.ErrorDataReceived += (_, e) => HandleLine(e.Data);
+            proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
+            await proc.WaitForExitAsync();
+
+            if (proc.ExitCode != 0) { Log($"Export failed (exit {proc.ExitCode})."); return; }
+
+            CopyProjectContent(outDir);
+            string exe = Path.Combine(outDir, "Lumo.Runtime.exe");
+            Log(File.Exists(exe) ? $"Export OK: {exe}" : $"Publish finished but exe not found: {exe}");
+        }
+        catch (Exception ex) { Log($"Export failed: {ex.Message}"); }
+        finally { _exporting = false; }
+    }
+
+    private void CopyProjectContent(string outDir)
+    {
+        string root = _project.Path;
+        foreach (string dir in new[] { "Scenes", "Graphs", "Scripts", "Assets" })
+        {
+            string src = Path.Combine(root, dir);
+            if (Directory.Exists(src))
+                CopyDirectory(src, Path.Combine(outDir, dir));
+        }
+        string projectFile = Path.Combine(root, "Project.json");
+        if (File.Exists(projectFile))
+            File.Copy(projectFile, Path.Combine(outDir, "Project.json"), true);
+    }
+
+    private static void CopyDirectory(string src, string dst)
+    {
+        Directory.CreateDirectory(dst);
+        foreach (string file in Directory.GetFiles(src))
+            File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), true);
+        foreach (string sub in Directory.GetDirectories(src))
+            CopyDirectory(sub, Path.Combine(dst, Path.GetFileName(sub)));
+    }
+
+    private static string? FindRuntimeProject()
+    {
+        string dir = AppContext.BaseDirectory;
+        for (int i = 0; i < 10 && !string.IsNullOrEmpty(dir); i++)
+        {
+            string candidate = Path.Combine(dir, "src", "Lumo.Runtime", "Lumo.Runtime.csproj");
+            if (File.Exists(candidate)) return candidate;
+            string flat = Path.Combine(dir, "Lumo.Runtime.csproj");
+            if (File.Exists(flat)) return flat;
+            dir = Path.GetDirectoryName(dir) ?? "";
+        }
+        return null;
+    }
+
+    private static string? FindDotnet()
+    {
+        var candidates = new List<string>();
+        string env = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "";
+        if (env.Length > 0) candidates.Add(env);
+        string self = Environment.ProcessPath ?? "";
+        if (self.Length > 0 && Path.GetFileName(self).StartsWith("dotnet", StringComparison.OrdinalIgnoreCase))
+            candidates.Add(self);
+        candidates.Add(@"C:\Program Files\dotnet\dotnet.exe");
+        candidates.Add(@"C:\Program Files (x86)\dotnet\dotnet.exe");
+        candidates.Add("/usr/share/dotnet/dotnet");
+        candidates.Add("/usr/local/share/dotnet/dotnet");
+        foreach (string c in candidates)
+            if (File.Exists(c)) return c;
+
+        foreach (string pathDir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
+        {
+            if (pathDir.Length == 0) continue;
+            string c = Path.Combine(pathDir, "dotnet.exe");
+            if (File.Exists(c)) return c;
+            c = Path.Combine(pathDir, "dotnet");
+            if (File.Exists(c)) return c;
+        }
+        return null;
+    }
+
     // ---------- Entity actions ----------
     private void CreateEntity(string name)
     {
+        PushSceneUndo();
         var entity = _scene.CreateEntity(name);
         _selectedEntity = entity;
         RefreshHierarchy();
@@ -1590,6 +1839,7 @@ public class WorkView : UserControl
 
     private void CreateEntityWithMesh(string name, string mesh)
     {
+        PushSceneUndo();
         var entity = _scene.CreateEntity(name);
         entity.MeshRenderer = new MeshRendererComponent { MeshName = mesh };
         _selectedEntity = entity;
@@ -1600,6 +1850,7 @@ public class WorkView : UserControl
 
     private void CreateCamera()
     {
+        PushSceneUndo();
         var e = _scene.CreateEntity("Camera");
         e.Camera = new CameraComponent { IsPrimary = false };
         e.Transform.Position = new System.Numerics.Vector3(0, 1, 5);
@@ -1611,6 +1862,7 @@ public class WorkView : UserControl
 
     private void CreateLight()
     {
+        PushSceneUndo();
         var e = _scene.CreateEntity("Directional Light");
         e.Light = new LightComponent { LightType = LightType.Directional, Intensity = 1.0f };
         e.Transform.SetRotationFromEuler(-45, 0, 0);
@@ -1623,6 +1875,7 @@ public class WorkView : UserControl
     private void DuplicateSelected()
     {
         if (_selectedEntity == null) { Log("Nothing to duplicate."); return; }
+        PushSceneUndo();
         var copy = _scene.CreateEntity($"{_selectedEntity.Name} (Copy)");
         copy.Transform.Position = _selectedEntity.Transform.Position + new System.Numerics.Vector3(1, 0, 0);
         _selectedEntity = copy;
@@ -1634,6 +1887,7 @@ public class WorkView : UserControl
     private void DeleteSelected()
     {
         if (_selectedEntity == null) { Log("Nothing to delete."); return; }
+        PushSceneUndo();
         var name = _selectedEntity.Name;
         _scene.DestroyEntity(_selectedEntity);
         _selectedEntity = null;
@@ -1731,6 +1985,7 @@ public class WorkView : UserControl
             var mesh = ObjImporter.Load(path);
             MeshLibrary.Register(mesh);
 
+            PushSceneUndo();
             var entity = _scene.CreateEntity(mesh.Name);
             entity.MeshRenderer = new MeshRendererComponent { MeshName = mesh.Name };
 
@@ -1747,6 +2002,22 @@ public class WorkView : UserControl
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+
+        bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        if (ctrl && !e.KeyModifiers.HasFlag(KeyModifiers.Alt) && e.Key == Key.Z)
+        {
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) RouteRedo();
+            else RouteUndo();
+            e.Handled = true;
+            return;
+        }
+        if (ctrl && (e.Key == Key.Y || (e.Key == Key.Z && e.KeyModifiers.HasFlag(KeyModifiers.Shift))))
+        {
+            RouteRedo();
+            e.Handled = true;
+            return;
+        }
+
         if (!_isPlaying || _playInput == null) return;
         var key = MapKey(e.Key);
         if (key != LumoKey.Unknown) { _playInput.KeyPressed(key); e.Handled = true; }
@@ -1785,7 +2056,7 @@ public class WorkView : UserControl
         void Item(string label, Action act)
         {
             var mi = new MenuItem { Header = label };
-            mi.Click += (_, _) => act();
+            mi.Click += (_, _) => { PushSceneUndo(); act(); };
             menu.Items.Add(mi);
         }
 
