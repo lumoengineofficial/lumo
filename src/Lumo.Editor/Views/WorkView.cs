@@ -120,6 +120,12 @@ public class WorkView : UserControl
             catch (Exception ex) { Log($"Scene load failed: {ex.Message}"); }
         }
         _selectedEntity = _scene.AllEntities.FirstOrDefault();
+
+        // Models imported earlier live as .obj under Assets/ — re-register them
+        // so MeshRenderer components keep resolving after a restart.
+        int meshes = ObjImporter.RegisterDirectory(Path.Combine(_project.Path, "Assets"));
+        if (meshes > 0)
+            Log($"Registered {meshes} mesh(es) from Assets.");
     }
 
     private void SaveProject()
@@ -306,6 +312,16 @@ public class WorkView : UserControl
         editButton.Click += (_, _) => _editFlyout?.ShowAt(editButton);
         _editFlyout = BuildEditMenu();
 
+        var pluginsButton = new Button
+        {
+            Content = UiTheme.Txt("Plugins", 12, UiTheme.Dim),
+            Background = UiTheme.B(Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(9, 6),
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        pluginsButton.Click += (_, _) => BuildPluginsMenu().ShowAt(pluginsButton);
+
         var menu = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -317,6 +333,7 @@ public class WorkView : UserControl
                 MenuLabel("Scene", NewScene),
                 projectButton,
                 editButton,
+                pluginsButton,
                 MenuLabel("Graphs", () => SetTopMode("Graphs")),
                 MenuLabel("Debug", () => { _bottomTab = "Debugger"; RebuildBottom(); }),
                 MenuLabel("Editor", OpenSettings),
@@ -512,7 +529,7 @@ public class WorkView : UserControl
         DockPanel.SetDock(toolbar, Dock.Top);
         content.Children.Add(tabs);
         content.Children.Add(toolbar);
-        content.Children.Add(_leftTopTab == "Scene" ? scroll : ImportPlaceholder());
+        content.Children.Add(_leftTopTab == "Scene" ? scroll : BuildImportPanel());
 
         RefreshHierarchy();
         return content;
@@ -535,11 +552,41 @@ public class WorkView : UserControl
         dp.Children.Insert(0, _leftHost);
     }
 
-    private static Control ImportPlaceholder() => new StackPanel
+    private Control BuildImportPanel()
     {
-        Margin = new Thickness(14, 30), Spacing = 6, HorizontalAlignment = HorizontalAlignment.Center,
-        Children = { UiTheme.Ico(Icons.Upload, 26, UiTheme.Faint), UiTheme.TxtAt("Select a file to see import options.", 11, UiTheme.Faint, FontWeight.Normal, HorizontalAlignment.Center) }
-    };
+        var stack = new StackPanel { Margin = new Thickness(14, 20), Spacing = 10 };
+
+        stack.Children.Add(UiTheme.Ico(Icons.Upload, 26, UiTheme.Faint));
+        stack.Children.Add(UiTheme.Txt("Import 3D model", 12, UiTheme.Text));
+
+        var importBtn = new Button
+        {
+            Content = UiTheme.Txt("Import 3D Model (.obj)…", 11, UiTheme.Text),
+            Background = UiTheme.B(UiTheme.Panel),
+            BorderBrush = UiTheme.B(UiTheme.Border),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(10, 7),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        importBtn.Click += (_, _) => _ = ImportAssetAsync();
+        stack.Children.Add(importBtn);
+
+        stack.Children.Add(UiTheme.TxtAt(
+            "Copies the file to Assets/, registers the mesh and spawns an entity. Click an .obj in the FileSystem panel to import it too.",
+            10, UiTheme.Faint, FontWeight.Normal, HorizontalAlignment.Left));
+
+        stack.Children.Add(UiTheme.Txt("Registered meshes", 11, UiTheme.Dim));
+        var names = MeshLibrary.Names.OrderBy(n => n, StringComparer.Ordinal).ToList();
+        if (names.Count == 0)
+            stack.Children.Add(UiTheme.TxtAt("None yet.", 10, UiTheme.Faint, FontWeight.Normal, HorizontalAlignment.Left));
+        else
+            foreach (string name in names)
+                stack.Children.Add(UiTheme.TxtAt("• " + name, 10, UiTheme.Dim, FontWeight.Normal, HorizontalAlignment.Left));
+
+        return new ScrollViewer { Content = stack, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled };
+    }
 
     private Control BuildFileSystemDock()
     {
@@ -560,7 +607,10 @@ public class WorkView : UserControl
             CornerRadius = new CornerRadius(5), Padding = new Thickness(8, 4), Margin = new Thickness(6, 0),
             Child = UiTheme.Txt("res://", 11, UiTheme.Text),
         };
+        var importBtn = UiTheme.IconBtn(Icons.Upload, () => _ = ImportAssetAsync(), 14);
+        DockPanel.SetDock(importBtn, Dock.Right);
         pathRow.Children.Add(newFolderBtn);
+        pathRow.Children.Add(importBtn);
         pathRow.Children.Add(pathBox);
 
         var filterRow = new DockPanel { Height = 30, Margin = new Thickness(8, 0, 8, 4) };
@@ -1573,6 +1623,42 @@ public class WorkView : UserControl
         return new MenuFlyout { ItemsSource = new object[] { undoItem, redoItem } };
     }
 
+    private MenuFlyout BuildPluginsMenu()
+    {
+        var items = new List<object>();
+        var plugins = PluginHost.Plugins;
+
+        if (plugins.Count == 0)
+            items.Add(new MenuItem { Header = "No plugins loaded", IsEnabled = false });
+
+        foreach (var p in plugins.Where(p => p.Success))
+            items.Add(new MenuItem { Header = $"{p.Name} {p.Version} ({p.Id})", IsEnabled = false });
+        foreach (var p in plugins.Where(p => !p.Success))
+            items.Add(new MenuItem { Header = $"{p.Name} — failed: {p.Error}", IsEnabled = false });
+
+        if (plugins.Count > 0)
+            items.Add(new Separator());
+
+        var engineFolder = new MenuItem { Header = "Open Engine Plugins Folder" };
+        engineFolder.Click += (_, _) => OpenPluginsFolder(Path.Combine(AppContext.BaseDirectory, "Plugins"));
+        var projectFolder = new MenuItem { Header = "Open Project Plugins Folder" };
+        projectFolder.Click += (_, _) => OpenPluginsFolder(Path.Combine(_project.Path, "Plugins"));
+        items.Add(engineFolder);
+        items.Add(projectFolder);
+
+        return new MenuFlyout { ItemsSource = items };
+    }
+
+    private void OpenPluginsFolder(string directory)
+    {
+        try
+        {
+            Directory.CreateDirectory(directory);
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{directory}\""));
+        }
+        catch (Exception ex) { Log($"Open plugins folder failed: {ex.Message}"); }
+    }
+
     // ---------- Undo / redo ----------
     private void PushSceneUndo()
     {
@@ -1974,7 +2060,18 @@ public class WorkView : UserControl
     {
         try
         {
-            var mesh = ObjImporter.Load(path);
+            // Keep a copy inside the project so the model survives restarts.
+            string assetsDir = Path.Combine(_project.Path, "Assets");
+            Directory.CreateDirectory(assetsDir);
+            string source = Path.GetFullPath(path);
+            string stored = source;
+            if (!source.StartsWith(assetsDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                stored = UniqueAssetPath(assetsDir, Path.GetFileNameWithoutExtension(path), Path.GetExtension(path));
+                File.Copy(source, stored);
+            }
+
+            var mesh = ObjImporter.Load(stored);
             MeshLibrary.Register(mesh);
 
             PushSceneUndo();
@@ -1984,8 +2081,9 @@ public class WorkView : UserControl
             _selectedEntity = entity;
             RefreshHierarchy();
             RefreshInspector();
+            RefreshFileTree();
             SaveProject();
-            Log($"Imported {mesh.Name}: {mesh.VertexCount} verts, {mesh.TriangleCount} tris.");
+            Log($"Imported {mesh.Name}: {mesh.VertexCount} verts, {mesh.TriangleCount} tris → {Path.GetRelativePath(_project.Path, stored)}");
         }
         catch (Exception ex) { Log($"OBJ import failed: {ex.Message}"); }
     }

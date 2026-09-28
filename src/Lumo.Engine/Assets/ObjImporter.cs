@@ -59,6 +59,31 @@ public static class ObjImporter
         return mesh;
     }
 
+    /// <summary>
+    /// Registers every *.obj under <paramref name="directory"/> (recursive) into
+    /// the MeshLibrary so saved scenes keep their models after a restart.
+    /// Broken files are skipped; returns the number of meshes registered.
+    /// </summary>
+    public static int RegisterDirectory(string directory)
+    {
+        if (!Directory.Exists(directory)) return 0;
+
+        int count = 0;
+        foreach (string file in Directory.GetFiles(directory, "*.obj", SearchOption.AllDirectories))
+        {
+            try
+            {
+                MeshLibrary.Register(Load(file));
+                count++;
+            }
+            catch
+            {
+                // A broken file must not hide the other models.
+            }
+        }
+        return count;
+    }
+
     private static uint VertIndex(string token, int count)
     {
         var head = token.Split('/')[0];
