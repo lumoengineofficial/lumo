@@ -3,6 +3,7 @@ using Lumo.Engine.Input;
 using Lumo.Engine.Scene;
 using Lumo.Engine.Scripting;
 using Lumo.Engine.VisualScripting;
+using Lumo.Plugins;
 using System.Text.Json;
 
 namespace Lumo.Runtime;
@@ -21,6 +22,7 @@ public sealed class GameRuntime : IDisposable
     private readonly HashSet<string> _loggedErrors = new(StringComparer.Ordinal);
     private GraphInterpreter? _graphs;
     private bool _started;
+    private Action<string>? _pluginLogSink;
 
     public Scene Scene { get; private set; } = new() { Name = "Empty" };
     public InputState Input => _input;
@@ -54,6 +56,10 @@ public sealed class GameRuntime : IDisposable
     /// <summary>Load a project directory (Project.json, Scenes/, Graphs/, Scripts/).</summary>
     public void LoadProject(string projectDir)
     {
+        _pluginLogSink ??= Log;
+        PluginHost.AttachSink(_pluginLogSink);
+        PluginHost.LoadDefault(projectDir);
+
         try
         {
             ProjectDir = projectDir;
@@ -194,6 +200,8 @@ public sealed class GameRuntime : IDisposable
 
     public void Dispose()
     {
+        if (_pluginLogSink != null)
+            PluginHost.DetachSink(_pluginLogSink);
         if (_started && _scripts.IsRunning)
             _scripts.Stop();
         _engine?.Dispose();

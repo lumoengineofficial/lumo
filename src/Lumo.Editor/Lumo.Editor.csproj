@@ -17,6 +17,9 @@
   <ItemGroup>
     <ProjectReference Include="..\Lumo.Engine\Lumo.Engine.csproj" />
     <ProjectReference Include="..\Lumo.Runtime\Lumo.Runtime.csproj" />
+    <ProjectReference Include="..\Lumo.Plugins\Lumo.Plugins.csproj" />
+    <!-- Build-order only: the sample plugin deploys itself to Plugins/. -->
+    <ProjectReference Include="..\Lumo.SamplePlugin\Lumo.SamplePlugin.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>

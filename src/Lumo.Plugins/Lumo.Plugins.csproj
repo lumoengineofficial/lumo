@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Lumo.Plugins</RootNamespace>
+    <AssemblyName>Lumo.Plugins</AssemblyName>
+    <NoWarn>NU1903</NoWarn>
+    <Description>Plugin contracts and loader for Lumo Engine.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Lumo.Engine\Lumo.Engine.csproj" />
+  </ItemGroup>
+
+</Project>

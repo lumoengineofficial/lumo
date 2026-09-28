@@ -16,6 +16,7 @@ using Lumo.Engine.Rendering.Abstractions;
 using Lumo.Engine.Scene;
 using Lumo.Engine.Scripting;
 using Lumo.Engine.VisualScripting;
+using Lumo.Plugins;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -94,6 +95,11 @@ public class WorkView : UserControl
         _engine = new LumoEngine();
         _engine.Initialize();
         _scene = new SceneType { Name = project.Name };
+
+        // Plugins must be registered before project graphs are read so their
+        // node types resolve (engine-level Plugins/ + project Plugins/).
+        PluginHost.AttachSink(Log);
+        PluginHost.LoadDefault(project.Path);
 
         ScriptHost.MessageLogged += OnScriptMessage;
 
