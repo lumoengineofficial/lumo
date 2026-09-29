@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Lumo.Editor.Ui;
 using Lumo.Engine.Core;
 using System;
@@ -15,7 +16,7 @@ public class HomeView : UserControl
 {
     private List<ProjectInfo> _projects = [];
     private List<ProjectInfo> _filtered = [];
-    private readonly Action<string?> _onNewProject;
+    private readonly Action<string, string> _onNewProject;
     private readonly Action<string> _onOpenProject;
 
     private StackPanel? _listPanel;
@@ -32,7 +33,7 @@ public class HomeView : UserControl
     private Panel? _layer;
     private Border? _dialogOverlay;
 
-    public HomeView(Action<string?> onNewProject, Action<string> onOpenProject)
+    public HomeView(Action<string, string> onNewProject, Action<string> onOpenProject)
     {
         _onNewProject = onNewProject;
         _onOpenProject = onOpenProject;
@@ -86,11 +87,41 @@ public class HomeView : UserControl
             MaxLength = 64,
         };
 
+        var pathBox = new TextBox
+        {
+            Text = ProjectManager.ProjectsRootPath,
+            FontSize = 13,
+            Width = 330,
+            Background = UiTheme.B(UiTheme.Panel),
+            Foreground = UiTheme.B(UiTheme.Text),
+            CaretBrush = UiTheme.B(UiTheme.Text),
+            BorderBrush = UiTheme.B(UiTheme.Border),
+            Padding = new Thickness(10, 8),
+            VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        };
+
         void CloseDialog()
         {
             if (_layer == null) return;
             _layer.Children.Remove(_dialogOverlay!);
             _dialogOverlay = null;
+        }
+
+        async void Browse()
+        {
+            var topLevel = TopLevel.GetTopLevel(this);
+            if (topLevel == null) return;
+            var folders = await topLevel.StorageProvider.OpenFolderPickerAsync(
+                new Avalonia.Platform.Storage.FolderPickerOpenOptions
+                {
+                    Title = "Select parent folder for the project",
+                    AllowMultiple = false,
+                });
+            if (folders.Count > 0)
+            {
+                string? local = folders[0].TryGetLocalPath();
+                if (!string.IsNullOrEmpty(local)) pathBox.Text = local;
+            }
         }
 
         void Create()
@@ -101,14 +132,29 @@ public class HomeView : UserControl
                 nameBox.BorderBrush = UiTheme.B(UiTheme.Red);
                 return;
             }
+            string basePath = (pathBox.Text ?? "").Trim();
             CloseDialog();
-            _onNewProject(name);
+            _onNewProject(name, basePath);
         }
 
-        nameBox.KeyDown += (_, e) =>
+        void OnBoxKeyDown(object? sender, KeyEventArgs e)
         {
             if (e.Key == Key.Enter) { e.Handled = true; Create(); }
             else if (e.Key == Key.Escape) { e.Handled = true; CloseDialog(); }
+        }
+
+        nameBox.KeyDown += OnBoxKeyDown;
+        pathBox.KeyDown += OnBoxKeyDown;
+
+        var pathRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children =
+            {
+                pathBox,
+                UiTheme.ActionButton("Browse", null, Browse),
+            }
         };
 
         var buttons = new StackPanel
@@ -123,21 +169,28 @@ public class HomeView : UserControl
             }
         };
 
+        var hint = UiTheme.Txt(
+            "The project folder is created inside the selected parent folder (with Scenes, Graphs, Scripts, Assets and Plugins).",
+            11, UiTheme.Faint);
+        hint.TextWrapping = TextWrapping.Wrap;
+
         var card = new Border
         {
             Background = UiTheme.B(UiTheme.Card),
             BorderBrush = UiTheme.B(UiTheme.Border),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(24, 22),
-            Width = 400,
+            Width = 470,
             Child = new StackPanel
             {
                 Spacing = 6,
                 Children =
                 {
                     UiTheme.Txt("New Project", 15, UiTheme.Text, FontWeight.SemiBold),
-                    UiTheme.Txt("The project name becomes the folder name under Documents/LumoProjects.", 11, UiTheme.Faint),
+                    hint,
                     nameBox,
+                    UiTheme.Txt("Location", 11, UiTheme.Faint),
+                    pathRow,
                     buttons,
                 }
             }

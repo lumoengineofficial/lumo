@@ -65,14 +65,10 @@ public class MainWindow : Window
     private void ShowHome()
     {
         var home = new HomeView(
-            onNewProject: (name) =>
+            onNewProject: (name, basePath) =>
             {
                 string finalName = string.IsNullOrWhiteSpace(name) ? "New Project" : name.Trim();
-                string dir = ProjectManager.ProjectsRootPath;
-                Directory.CreateDirectory(dir);
-                string sanitized = string.Concat(finalName.Split(Path.GetInvalidFileNameChars())).Replace(" ", "_");
-                string projectPath = Path.Combine(dir, sanitized);
-                ProjectManager.CreateProject(finalName, "");
+                string projectPath = ProjectManager.CreateProject(finalName, "", basePath);
                 ShowWork(projectPath);
             },
             onOpenProject: (path) =>
