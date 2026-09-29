@@ -5,28 +5,40 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Lumo.Engine.Assets;
 using Lumo.Engine.Input;
+using Lumo.Engine.Rendering;
 using Lumo.Engine.Rendering.Software;
 using Lumo.Engine.Scene;
 using Lumo.Engine.VisualScripting;
+using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using Mesh = Lumo.Engine.Rendering.Abstractions.Mesh;
 using Key = Avalonia.Input.Key;
 using LumoKey = Lumo.Engine.Input.Key;
+using MouseButton = Lumo.Engine.Input.MouseButton;
 
 namespace Lumo.Runtime;
 
 /// <summary>
-/// Game view: renders the active scene every frame (game camera when a primary
-/// camera exists, otherwise auto-framed 2D / default 3D view), feeds keyboard
-/// input to the runtime and drives the engine tick.
+/// Game view: shows a loading screen, then renders the active scene every frame
+/// (game camera when a primary camera exists, otherwise auto-framed 2D / default
+/// 3D view), feeds keyboard and mouse input to the runtime and drives the tick.
 /// </summary>
 public sealed class GameView : Control
 {
     private readonly GameRuntime _runtime;
     private System.Timers.Timer? _loop;
     private static readonly Color Bg = Color.Parse("#101425");
+    private static readonly Color LoadingBg = Color.Parse("#0B0E1A");
+
+    private readonly Stopwatch _loadingWatch = new();
+    private bool _started;
+    private bool _captured;
+    private static Bitmap? _logo;
+
+    /// <summary>Seconds the loading screen stays up before the game starts.</summary>
+    public double LoadingSeconds { get; set; } = 2.2;
 
     public GameView(GameRuntime runtime)
     {
@@ -38,14 +50,36 @@ public sealed class GameView : Control
     public void BeginLoop()
     {
         Focus();
+        _loadingWatch.Restart();
         _loop = new System.Timers.Timer(16);
         _loop.Elapsed += (_, _) =>
-            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-            {
-                _runtime.Tick();
-                InvalidateVisual();
-            }, Avalonia.Threading.DispatcherPriority.Render);
+            Avalonia.Threading.Dispatcher.UIThread.Post(Frame, Avalonia.Threading.DispatcherPriority.Render);
         _loop.Start();
+    }
+
+    private void Frame()
+    {
+        if (!_started)
+        {
+            if (_runtime.LoadError == null && _loadingWatch.Elapsed.TotalSeconds >= LoadingSeconds)
+            {
+                try
+                {
+                    _runtime.Start();
+                    _started = true;
+                    Focus();
+                }
+                catch (Exception ex)
+                {
+                    _runtime.LoadError = $"Play start failed: {ex.Message}";
+                }
+            }
+            InvalidateVisual();
+            return;
+        }
+
+        _runtime.Tick();
+        InvalidateVisual();
     }
 
     public void Shutdown()
@@ -66,6 +100,8 @@ public sealed class GameView : Control
             _runtime.Input.KeyPressed(key);
             e.Handled = true;
         }
+        if (e.Key == Key.Escape && _captured)
+            ReleaseLook();
     }
 
     protected override void OnKeyUp(KeyEventArgs e)
@@ -78,6 +114,76 @@ public sealed class GameView : Control
             e.Handled = true;
         }
     }
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        base.OnPointerPressed(e);
+        if (!_started)
+            return;
+        Focus();
+        var props = e.GetCurrentPoint(this).Properties;
+        MouseButton button =
+            props.IsRightButtonPressed ? MouseButton.Right :
+            props.IsMiddleButtonPressed ? MouseButton.Middle :
+            MouseButton.Left;
+        _runtime.Input.MousePressed(button);
+        if (button == MouseButton.Left && !_captured)
+            CaptureLook();
+        e.Pointer.Capture(this);
+        e.Handled = true;
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e);
+        if (!_started)
+            return;
+        _runtime.Input.MouseReleased(MapButton(e.InitialPressMouseButton));
+        e.Pointer.Capture(null);
+        e.Handled = true;
+    }
+
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        base.OnPointerMoved(e);
+        if (!_started || !_captured)
+            return;
+
+        // Look deltas come from the OS cursor: the pointer is parked at the
+        // window centre, so any movement is turned into mouse-look pixels.
+        if (!GetCursorPos(out var cur) || !TryGetClientCenter(out var center))
+            return;
+
+        int dx = cur.X - center.X;
+        int dy = cur.Y - center.Y;
+        if (Math.Abs(dx) >= 1 || Math.Abs(dy) >= 1)
+        {
+            _runtime.Input.AddMouseDelta(dx, dy);
+            SetCursorPos(center.X, center.Y);
+        }
+        e.Handled = true;
+    }
+
+    private void CaptureLook()
+    {
+        _captured = true;
+        Cursor = new Cursor(StandardCursorType.None);
+        if (TryGetClientCenter(out var center))
+            SetCursorPos(center.X, center.Y);
+    }
+
+    private void ReleaseLook()
+    {
+        _captured = false;
+        Cursor = Cursor.Default;
+    }
+
+    private static MouseButton MapButton(Avalonia.Input.MouseButton button) => button switch
+    {
+        Avalonia.Input.MouseButton.Right => MouseButton.Right,
+        Avalonia.Input.MouseButton.Middle => MouseButton.Middle,
+        _ => MouseButton.Left,
+    };
 
     private static LumoKey MapKey(Key key) => key switch
     {
@@ -94,6 +200,50 @@ public sealed class GameView : Control
         Key.LeftShift => LumoKey.LeftShift, Key.LeftCtrl => LumoKey.LeftControl, Key.LeftAlt => LumoKey.LeftAlt,
         _ => LumoKey.Unknown,
     };
+
+    // ------------------------------------------------------------ win32 cursor
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WinPoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WinRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out WinPoint point);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetClientRect(IntPtr hwnd, out WinRect rect);
+
+    [DllImport("user32.dll")]
+    private static extern bool ClientToScreen(IntPtr hwnd, ref WinPoint point);
+
+    private bool TryGetClientCenter(out WinPoint center)
+    {
+        center = default;
+        var handle = TopLevel.GetTopLevel(this)?.TryGetPlatformHandle()?.Handle ?? IntPtr.Zero;
+        if (handle == IntPtr.Zero || !GetClientRect(handle, out var rect))
+            return false;
+
+        var point = new WinPoint { X = (rect.Right - rect.Left) / 2, Y = (rect.Bottom - rect.Top) / 2 };
+        if (!ClientToScreen(handle, ref point))
+            return false;
+        center = point;
+        return true;
+    }
 
     // ------------------------------------------------------------ camera
 
@@ -191,6 +341,12 @@ public sealed class GameView : Control
         return new Vector2((ndcX + 1) * 0.5f * w, (1 - ndcY) * 0.5f * h);
     }
 
+    private static Vector3 CameraPosition(Matrix4x4 view)
+    {
+        Matrix4x4.Invert(view, out var inv);
+        return new Vector3(inv.M41, inv.M42, inv.M43);
+    }
+
     // ------------------------------------------------------------ render
 
     public override void Render(DrawingContext ctx)
@@ -198,10 +354,25 @@ public sealed class GameView : Control
         int w = Math.Max(1, (int)Bounds.Width);
         int h = Math.Max(1, (int)Bounds.Height);
 
+        if (_runtime.LoadError != null)
+        {
+            ctx.FillRectangle(new SolidColorBrush(Bg), new Rect(0, 0, w, h));
+            DrawOverlayText(ctx, _runtime.LoadError, w, h, Color.Parse("#ff8080"));
+            return;
+        }
+
+        if (!_started)
+        {
+            DrawLoading(ctx, w, h);
+            return;
+        }
+
         ctx.FillRectangle(new SolidColorBrush(Bg), new Rect(0, 0, w, h));
 
         var scene = _runtime.Scene;
         var (view, proj) = GetMatrices(w, h);
+        Vector3 camPos = CameraPosition(view);
+        bool shading = FxRegistry.MeshShading;
 
         foreach (var entity in scene.AllEntities)
         {
@@ -212,9 +383,9 @@ public sealed class GameView : Control
                 if (!entity.MeshRenderer.IsVisible) continue;
                 var mesh = MeshLibrary.Get(entity.MeshRenderer.MeshName);
                 if (mesh != null && mesh.Vertices.Length >= 9 && mesh.Indices.Length >= 3)
-                    DrawMesh(ctx, mesh, entity, view, proj, w, h);
+                    DrawMesh(ctx, mesh, entity, view, proj, camPos, shading, w, h);
                 else
-                    DrawCube(ctx, entity.Transform.Position, MathF.Max(0.1f, entity.Transform.Scale.Y), view, proj, w, h);
+                    DrawCube(ctx, entity, view, proj, camPos, shading, w, h);
             }
             else if (entity.SpriteRenderer is { IsVisible: true } sp)
             {
@@ -222,14 +393,122 @@ public sealed class GameView : Control
             }
         }
 
+        DrawFrameEffects(ctx, w, h);
+
         foreach (var entry in _runtime.Hud.Entries)
             DrawHudEntry(ctx, entry, w, h);
 
-        if (_runtime.LoadError != null)
-            DrawOverlayText(ctx, _runtime.LoadError, w, h, Color.Parse("#ff8080"));
-        else if (scene.AllEntities.Count == 0)
+        if (scene.AllEntities.Count == 0)
             DrawOverlayText(ctx, "No scene loaded.", w, h, Color.Parse("#666677"));
     }
+
+    private static void DrawFrameEffects(DrawingContext ctx, int w, int h)
+    {
+        foreach (var fx in FxRegistry.Snapshot())
+        {
+            float intensity = Math.Clamp(fx.Intensity, 0f, 1f);
+            if (intensity <= 0f)
+                continue;
+
+            switch (fx.Kind)
+            {
+                case FxKind.Vignette:
+                    var vignette = new RadialGradientBrush
+                    {
+                        GradientStops =
+                        {
+                            new GradientStop(Color.FromArgb(0, 0, 0, 0), 0.0),
+                            new GradientStop(Color.FromArgb(0, 0, 0, 0), 0.55),
+                            new GradientStop(Color.FromArgb((byte)(215 * intensity), 0, 0, 0), 1.0)
+                        }
+                    };
+                    ctx.FillRectangle(vignette, new Rect(0, 0, w, h));
+                    break;
+
+                case FxKind.ColorGrade:
+                    byte r = (byte)Math.Clamp(fx.Tint.X * 255f, 0, 255);
+                    byte g = (byte)Math.Clamp(fx.Tint.Y * 255f, 0, 255);
+                    byte b = (byte)Math.Clamp(fx.Tint.Z * 255f, 0, 255);
+                    ctx.FillRectangle(
+                        new SolidColorBrush(Color.FromArgb((byte)(46 * intensity), r, g, b)),
+                        new Rect(0, 0, w, h));
+                    break;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ loading
+
+    private void DrawLoading(DrawingContext ctx, int w, int h)
+    {
+        ctx.FillRectangle(new SolidColorBrush(LoadingBg), new Rect(0, 0, w, h));
+
+        double t = LoadingSeconds <= 0
+            ? 1
+            : Math.Clamp(_loadingWatch.Elapsed.TotalSeconds / LoadingSeconds, 0, 1);
+
+        double centerX = w * 0.5;
+
+        var logo = Logo;
+        if (logo != null)
+        {
+            double logoH = 150;
+            double aspect = (double)logo.PixelSize.Width / Math.Max(1, logo.PixelSize.Height);
+            double logoW = logoH * aspect;
+            double logoY = h * 0.30 - logoH * 0.5;
+            ctx.DrawImage(logo, new Rect(centerX - logoW * 0.5, logoY, logoW, logoH));
+        }
+
+        var title = MakeText("LUMO ENGINE", 30, Color.Parse("#F2F5FF"), FontWeight.Bold);
+        ctx.DrawText(title, new Point(centerX - title.Width * 0.5, h * 0.30 + 92));
+
+        var sub = MakeText(_runtime.Title, 16, Color.Parse("#8E9AC4"));
+        ctx.DrawText(sub, new Point(centerX - sub.Width * 0.5, h * 0.30 + 136));
+
+        double barW = 440, barH = 8;
+        double barX = centerX - barW * 0.5;
+        double barY = h * 0.62;
+        ctx.FillRectangle(new SolidColorBrush(Color.Parse("#1A2036")), new Rect(barX, barY, barW, barH), 4);
+        double ease = 1 - Math.Pow(1 - t, 3);
+        if (ease > 0.001)
+            ctx.FillRectangle(new SolidColorBrush(Color.Parse("#4F9DED")), new Rect(barX, barY, barW * ease, barH), 4);
+
+        var percent = MakeText($"{(int)(t * 100)}%", 14, Color.Parse("#8E9AC4"));
+        ctx.DrawText(percent, new Point(centerX - percent.Width * 0.5, barY + 18));
+
+        var loading = MakeText("Loading " + (_runtime.Title ?? "game") + "...", 15, Color.Parse("#C9D2F0"));
+        ctx.DrawText(loading, new Point(centerX - loading.Width * 0.5, barY - 34));
+
+        var tip = MakeText("Click to capture mouse  |  WASD move  |  Left click shoot  |  Esc release",
+            13, Color.Parse("#5D6794"));
+        ctx.DrawText(tip, new Point(centerX - tip.Width * 0.5, h * 0.84));
+    }
+
+    private static Bitmap? Logo => _logo ??= LoadLogo();
+
+    private static Bitmap? LoadLogo()
+    {
+        try
+        {
+            var asm = typeof(GameView).Assembly;
+            string? name = asm.GetManifestResourceNames()
+                .FirstOrDefault(n => n.EndsWith("lumo_logo_transparent.png", StringComparison.OrdinalIgnoreCase));
+            if (name == null)
+                return null;
+            using var stream = asm.GetManifestResourceStream(name);
+            return stream == null ? null : new Bitmap(stream);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static FormattedText MakeText(string text, double size, Color color, FontWeight weight = FontWeight.Normal) =>
+        new(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+            new Typeface("Segoe UI", FontStyle.Normal, weight), size, new SolidColorBrush(color));
+
+    // ------------------------------------------------------------ draw
 
     private static void DrawHudEntry(DrawingContext ctx, HudEntry entry, int w, int h)
     {
@@ -311,8 +590,16 @@ public sealed class GameView : Control
         return bmp;
     }
 
-    private static void DrawCube(DrawingContext ctx, Vector3 center, float size, Matrix4x4 view, Matrix4x4 proj, int w, int h)
+    private static Color ShadeColor(Vector3 baseColor, float brightness) => Color.FromRgb(
+        (byte)Math.Clamp(baseColor.X * brightness * 255f, 0, 255),
+        (byte)Math.Clamp(baseColor.Y * brightness * 255f, 0, 255),
+        (byte)Math.Clamp(baseColor.Z * brightness * 255f, 0, 255));
+
+    private static void DrawCube(DrawingContext ctx, Entity entity, Matrix4x4 view, Matrix4x4 proj, Vector3 camPos, bool shading, int w, int h)
     {
+        Vector3 center = entity.Transform.Position;
+        float size = MathF.Max(0.1f, entity.Transform.Scale.Y);
+        var baseColor = entity.MeshRenderer?.Color ?? new Vector3(0.55f, 0.62f, 0.75f);
         float hs = size * 0.5f;
         var verts = new Vector3[]
         {
@@ -325,8 +612,7 @@ public sealed class GameView : Control
             [0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7],
             [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0]
         ];
-        var fill = new SolidColorBrush(Color.FromRgb(140, 160, 200));
-        var edge = new Pen(new SolidColorBrush(Color.FromRgb(180, 200, 230)), 1.2);
+        var edge = new Pen(new SolidColorBrush(Color.FromRgb(180, 200, 230)), 1.0);
 
         var faceList = new List<(float depth, int[] face)>();
         foreach (var f in faces)
@@ -353,15 +639,21 @@ public sealed class GameView : Control
                 gc.LineTo(new Point(p3.X, p3.Y));
                 gc.EndFigure(true);
             }
+
+            Vector3 normal = Vector3.Normalize(Vector3.Cross(verts[f[1]] - verts[f[0]], verts[f[2]] - verts[f[0]]));
+            Vector3 mid = (verts[f[0]] + verts[f[2]]) * 0.5f;
+            float brightness = shading ? FxLighting.Brightness(normal, camPos - mid) : 1f;
+            var fill = new SolidColorBrush(ShadeColor(baseColor, brightness));
             ctx.DrawGeometry(fill, edge, geo);
         }
     }
 
-    private static void DrawMesh(DrawingContext ctx, Mesh mesh, Entity entity, Matrix4x4 view, Matrix4x4 proj, int w, int h)
+    private static void DrawMesh(DrawingContext ctx, Mesh mesh, Entity entity, Matrix4x4 view, Matrix4x4 proj, Vector3 camPos, bool shading, int w, int h)
     {
         var m = entity.Transform.LocalToWorldMatrix;
         var verts = mesh.Vertices;
         var idx = mesh.Indices;
+        var baseColor = entity.MeshRenderer?.Color ?? new Vector3(0.55f, 0.62f, 0.75f);
 
         var world = new Vector3[verts.Length / 3];
         for (int i = 0; i < world.Length; i++)
@@ -380,8 +672,7 @@ public sealed class GameView : Control
         }
         tris.Sort((x, y) => y.depth.CompareTo(x.depth));
 
-        var fill = new SolidColorBrush(Color.FromRgb(140, 160, 200));
-        var edge = new Pen(new SolidColorBrush(Color.FromRgb(180, 200, 230)), 1.2);
+        var edge = new Pen(new SolidColorBrush(Color.FromRgb(150, 168, 200)), 0.8);
         foreach (var (_, ai, bi, ci) in tris)
         {
             var p0 = Project(world[ai], view, proj, w, h);
@@ -397,7 +688,11 @@ public sealed class GameView : Control
                 gc.LineTo(new Point(p2.X, p2.Y));
                 gc.EndFigure(true);
             }
-            ctx.DrawGeometry(fill, edge, geo);
+
+            Vector3 normal = Vector3.Normalize(Vector3.Cross(world[bi] - world[ai], world[ci] - world[ai]));
+            Vector3 centroid = (world[ai] + world[bi] + world[ci]) / 3f;
+            float brightness = shading ? FxLighting.Brightness(normal, camPos - centroid) : 1f;
+            ctx.DrawGeometry(new SolidColorBrush(ShadeColor(baseColor, brightness)), edge, geo);
         }
     }
 }

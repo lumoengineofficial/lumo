@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Lumo.GraphicsPlugin</RootNamespace>
+    <AssemblyName>Lumo.GraphicsPlugin</AssemblyName>
+    <NoWarn>NU1903</NoWarn>
+    <Description>Graphics enhancement plugin: vignette, color grade and lambert mesh shading.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Lumo.Plugins\Lumo.Plugins.csproj" />
+  </ItemGroup>
+
+  <!-- Deploy next to the editor and runtime hosts so PluginHost finds it. -->
+  <Target Name="DeployToHostPlugins" AfterTargets="Build">
+    <MakeDir Directories="..\Lumo.Editor\bin\$(Configuration)\$(TargetFramework)\Plugins\" />
+    <Copy SourceFiles="$(TargetPath)"
+          DestinationFolder="..\Lumo.Editor\bin\$(Configuration)\$(TargetFramework)\Plugins\"
+          SkipUnchangedFiles="true" />
+    <MakeDir Directories="..\Lumo.Runtime\bin\$(Configuration)\$(TargetFramework)\Plugins\" />
+    <Copy SourceFiles="$(TargetPath)"
+          DestinationFolder="..\Lumo.Runtime\bin\$(Configuration)\$(TargetFramework)\Plugins\"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

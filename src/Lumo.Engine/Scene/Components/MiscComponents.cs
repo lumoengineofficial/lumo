@@ -8,6 +8,7 @@ public sealed class MeshRendererComponent
     public string? MeshName { get; set; }
     public string? MaterialName { get; set; }
     public bool IsVisible { get; set; } = true;
+    public System.Numerics.Vector3 Color { get; set; } = new(0.55f, 0.62f, 0.75f);
 }
 
 /// <summary>

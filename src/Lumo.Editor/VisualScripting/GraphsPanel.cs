@@ -43,7 +43,7 @@ public sealed class GraphsPanel : UserControl
     private sealed record PaletteItem(NodeDefinition Def);
 
     private static readonly string[] CategoryOrder =
-        ["Events", "Flow", "Entity", "Actions", "Variables", "Logic", "Math", "Values"];
+        ["Events", "Flow", "Entity", "Actions", "Input", "Physics", "Variables", "Logic", "Math", "Values", "HUD", "Graphics"];
 
     public event Action<string>? Notify;
 

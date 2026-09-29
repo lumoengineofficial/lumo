@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\src\Lumo.Runtime\Lumo.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Lumo.Plugins\Lumo.Plugins.csproj" />
     <ProjectReference Include="..\Lumo.TestPlugin\Lumo.TestPlugin.csproj" />
+    <ProjectReference Include="..\..\src\Lumo.GraphicsPlugin\Lumo.GraphicsPlugin.csproj" />
   </ItemGroup>
 
   <ItemGroup>

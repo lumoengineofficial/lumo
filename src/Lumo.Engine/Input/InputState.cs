@@ -61,7 +61,11 @@ public sealed class InputState
         _justPressedButtons.Clear();
         _justReleasedButtons.Clear();
         ScrollDelta = 0;
+        MouseDelta = Vector2.Zero;
     }
+
+    /// <summary>Accumulates pointer movement since the last frame (pixels).</summary>
+    public void AddMouseDelta(float dx, float dy) => MouseDelta += new Vector2(dx, dy);
 
     public void KeyPressed(Key key)
     {

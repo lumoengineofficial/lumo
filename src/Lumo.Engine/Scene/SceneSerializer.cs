@@ -43,7 +43,8 @@ public static class SceneSerializer
             {
                 MeshName = entity.MeshRenderer.MeshName,
                 MaterialName = entity.MeshRenderer.MaterialName,
-                IsVisible = entity.MeshRenderer.IsVisible
+                IsVisible = entity.MeshRenderer.IsVisible,
+                Color = [entity.MeshRenderer.Color.X, entity.MeshRenderer.Color.Y, entity.MeshRenderer.Color.Z]
             };
         }
 
@@ -141,7 +142,10 @@ public static class SceneSerializer
                 {
                     MeshName = entityData.MeshRenderer.MeshName,
                     MaterialName = entityData.MeshRenderer.MaterialName,
-                    IsVisible = entityData.MeshRenderer.IsVisible
+                    IsVisible = entityData.MeshRenderer.IsVisible,
+                    Color = entityData.MeshRenderer.Color is { Length: >= 3 } c
+                        ? new Vector3(c[0], c[1], c[2])
+                        : new Vector3(0.55f, 0.62f, 0.75f)
                 };
             }
 

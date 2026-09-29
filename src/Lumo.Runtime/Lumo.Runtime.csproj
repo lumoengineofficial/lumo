@@ -18,6 +18,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Lumo logo for the loading screen (shared with the editor's assets). -->
+    <EmbeddedResource Include="..\Lumo.Editor\Assets\lumo_logo_transparent.png"
+                      LogicalName="Lumo.Runtime.lumo_logo_transparent.png" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.2.3" />
     <PackageReference Include="Avalonia.Desktop" Version="11.2.3" />
   </ItemGroup>

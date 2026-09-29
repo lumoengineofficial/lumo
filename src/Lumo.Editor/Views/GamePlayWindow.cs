@@ -42,7 +42,7 @@ public sealed class GamePlayWindow : Window
             }
             try
             {
-                _runtime.Start();
+                // GameView shows the loading screen, then starts the runtime itself.
                 _view.BeginLoop();
             }
             catch (Exception ex)

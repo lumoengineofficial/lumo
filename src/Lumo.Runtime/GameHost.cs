@@ -55,7 +55,7 @@ public static class GameHost
 
         window.Opened += (_, _) =>
         {
-            _runtime.Start();
+            // GameView shows the loading screen, then starts the runtime itself.
             view.BeginLoop();
         };
         return window;

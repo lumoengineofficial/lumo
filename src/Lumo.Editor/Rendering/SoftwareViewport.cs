@@ -4,6 +4,7 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Lumo.Engine.Assets;
+using Lumo.Engine.Rendering;
 using Lumo.Engine.Rendering.Software;
 using Lumo.Engine.Scene;
 using System;
@@ -500,7 +501,10 @@ public class SoftwareViewport : Control
     {
         if (_scene == null) return;
 
-        var fillPen = new Pen(new SolidColorBrush(Color.FromRgb(140, 160, 200)), 1.2);
+        Matrix4x4.Invert(view, out var invView);
+        var camPos = new Vector3(invView.M41, invView.M42, invView.M43);
+        bool shading = FxRegistry.MeshShading;
+
         var edgePen = new Pen(new SolidColorBrush(Color.FromRgb(180, 200, 230)), 1.4);
         var lightPen = new Pen(new SolidColorBrush(Color.FromRgb(255, 220, 80)), 1.5);
         var camPen = new Pen(new SolidColorBrush(Color.FromRgb(80, 200, 200)), 1.5);
@@ -518,9 +522,9 @@ public class SoftwareViewport : Control
                 if (!entity.MeshRenderer.IsVisible) continue;
                 var mesh = MeshLibrary.Get(entity.MeshRenderer.MeshName);
                 if (mesh != null && mesh.Vertices.Length >= 9 && mesh.Indices.Length >= 3)
-                    DrawMesh(ctx, mesh, entity, view, proj, w, h, fillPen, edgePen);
+                    DrawMesh(ctx, mesh, entity, view, proj, camPos, shading, w, h, edgePen);
                 else
-                    DrawCube(ctx, pos, s, view, proj, w, h, fillPen, edgePen);
+                    DrawCube(ctx, entity, view, proj, camPos, shading, w, h, edgePen);
             }
             else if (entity.SpriteRenderer != null && entity.SpriteRenderer.IsVisible)
             {
@@ -543,11 +547,17 @@ public class SoftwareViewport : Control
         }
     }
 
-    private void DrawMesh(DrawingContext ctx, Mesh mesh, Entity entity, Matrix4x4 view, Matrix4x4 proj, int w, int h, Pen fill, Pen edge)
+    private static Color ShadeColor(Vector3 baseColor, float brightness) => Color.FromRgb(
+        (byte)Math.Clamp(baseColor.X * brightness * 255f, 0, 255),
+        (byte)Math.Clamp(baseColor.Y * brightness * 255f, 0, 255),
+        (byte)Math.Clamp(baseColor.Z * brightness * 255f, 0, 255));
+
+    private void DrawMesh(DrawingContext ctx, Mesh mesh, Entity entity, Matrix4x4 view, Matrix4x4 proj, Vector3 camPos, bool shading, int w, int h, Pen edge)
     {
         var m = entity.Transform.LocalToWorldMatrix;
         var verts = mesh.Vertices;
         var idx = mesh.Indices;
+        var baseColor = entity.MeshRenderer?.Color ?? new Vector3(0.55f, 0.62f, 0.75f);
 
         // Transform vertices once.
         var world = new Vector3[verts.Length / 3];
@@ -585,7 +595,11 @@ public class SoftwareViewport : Control
                 gc.LineTo(new Point(p2.X, p2.Y));
                 gc.EndFigure(true);
             }
-            ctx.DrawGeometry(fill.Brush, edge, geo);
+
+            Vector3 normal = Vector3.Normalize(Vector3.Cross(world[bi] - world[ai], world[ci] - world[ai]));
+            Vector3 centroid = (world[ai] + world[bi] + world[ci]) / 3f;
+            float brightness = shading ? FxLighting.Brightness(normal, camPos - centroid) : 1f;
+            ctx.DrawGeometry(new SolidColorBrush(ShadeColor(baseColor, brightness)), edge, geo);
         }
     }
 
@@ -696,8 +710,11 @@ public class SoftwareViewport : Control
         }
     }
 
-    private void DrawCube(DrawingContext ctx, Vector3 center, float size, Matrix4x4 view, Matrix4x4 proj, int w, int h, Pen fill, Pen edge)
+    private void DrawCube(DrawingContext ctx, Entity entity, Matrix4x4 view, Matrix4x4 proj, Vector3 camPos, bool shading, int w, int h, Pen edge)
     {
+        Vector3 center = entity.Transform.Position;
+        float size = MathF.Max(0.1f, (entity.Transform.Scale.X + entity.Transform.Scale.Y + entity.Transform.Scale.Z) / 3f);
+        var baseColor = entity.MeshRenderer?.Color ?? new Vector3(0.55f, 0.62f, 0.75f);
         float hs = size * 0.5f;
         var verts = new Vector3[]
         {
@@ -739,7 +756,11 @@ public class SoftwareViewport : Control
                 gc.LineTo(new Point(p3.X, p3.Y));
                 gc.EndFigure(true);
             }
-            ctx.DrawGeometry(fill.Brush, edge, geo);
+
+            Vector3 normal = Vector3.Normalize(Vector3.Cross(verts[f[1]] - verts[f[0]], verts[f[2]] - verts[f[0]]));
+            Vector3 mid = (verts[f[0]] + verts[f[2]]) * 0.5f;
+            float brightness = shading ? FxLighting.Brightness(normal, camPos - mid) : 1f;
+            ctx.DrawGeometry(new SolidColorBrush(ShadeColor(baseColor, brightness)), edge, geo);
         }
     }
 

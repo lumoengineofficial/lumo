@@ -710,6 +710,10 @@ public sealed class GraphCanvas : Control
             "Values" => Color.Parse("#e8a33d"),
             "Entity" => Color.Parse("#5a9bd5"),
             "Variables" => Color.Parse("#c06ad9"),
+            "Input" => Color.Parse("#f07f5a"),
+            "Physics" => Color.Parse("#8ad44f"),
+            "HUD" => Color.Parse("#ffd75e"),
+            "Graphics" => Color.Parse("#d35ad0"),
             _ => Color.Parse("#5c6580")
         };
 

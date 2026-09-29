@@ -58,24 +58,29 @@ public sealed class TransformComponent
         Rotation = Quaternion.Normalize(yawQ * pitchQ * rollQ);
     }
 
+    /// <summary>
+    /// Euler angles (degrees) that reproduce this rotation through
+    /// <see cref="SetRotationFromEuler"/> (yaw * pitch * roll order).
+    /// </summary>
     public Vector3 GetEulerAngles()
     {
         Matrix4x4 m = Matrix4x4.CreateFromQuaternion(Rotation);
-        float sy = MathF.Sqrt(m.M11 * m.M11 + m.M21 * m.M21);
-        bool singular = sy < 1e-6f;
+        float cx = MathF.Sqrt(m.M12 * m.M12 + m.M22 * m.M22);
+        bool singular = cx < 1e-6f;
 
         float x, y, z;
         if (!singular)
         {
-            x = MathF.Atan2(m.M32, m.M33);
-            y = MathF.Atan2(-m.M31, sy);
-            z = MathF.Atan2(m.M21, m.M11);
+            x = MathF.Atan2(-m.M32, cx);
+            y = MathF.Atan2(m.M31, m.M33);
+            z = MathF.Atan2(m.M12, m.M22);
         }
         else
         {
-            x = MathF.Atan2(-m.M23, m.M22);
-            y = MathF.Atan2(-m.M31, sy);
-            z = 0;
+            // Pitch at +/-90: yaw and roll merge; report the combined yaw.
+            x = MathF.Atan2(-m.M32, cx);
+            y = MathF.Atan2(m.M21, m.M11);
+            z = 0f;
         }
 
         return new Vector3(x, y, z) * MathHelper.Rad2Deg;

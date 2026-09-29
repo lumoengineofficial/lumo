@@ -23,6 +23,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lumo.Plugins", "src\Lumo.Pl
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lumo.SamplePlugin", "src\Lumo.SamplePlugin\Lumo.SamplePlugin.csproj", "{A7C9E4F2-5B1D-4E8A-9C3F-1D2E3F4A5B6C}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lumo.GraphicsPlugin", "src\Lumo.GraphicsPlugin\Lumo.GraphicsPlugin.csproj", "{C9E1D2A4-7F3B-4A6D-8B2E-5F6A7C8D9E01}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -141,6 +143,18 @@ Global
 		{B8D0F5A3-6C2E-4F9B-AD4E-2E3F4A5B6C7D}.Release|x64.Build.0 = Release|Any CPU
 		{B8D0F5A3-6C2E-4F9B-AD4E-2E3F4A5B6C7D}.Release|x86.ActiveCfg = Release|Any CPU
 		{B8D0F5A3-6C2E-4F9B-AD4E-2E3F4A5B6C7D}.Release|x86.Build.0 = Release|Any CPU
+		{C9E1D2A4-7F3B-4A6D-8B2E-5F6A7C8D9E01}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C9E1D2A4-7F3B-4A6D-8B2E-5F6A7C8D9E01}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C9E1D2A4-7F3B-4A6D-8B2E-5F6A7C8D9E01}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{C9E1D2A4-7F3B-4A6D-8B2E-5F6A7C8D9E01}.Debug|x64.Build.0 = Debug|Any CPU
+		{C9E1D2A4-7F3B-4A6D-8B2E-5F6A7C8D9E01}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{C9E1D2A4-7F3B-4A6D-8B2E-5F6A7C8D9E01}.Debug|x86.Build.0 = Debug|Any CPU
+		{C9E1D2A4-7F3B-4A6D-8B2E-5F6A7C8D9E01}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C9E1D2A4-7F3B-4A6D-8B2E-5F6A7C8D9E01}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C9E1D2A4-7F3B-4A6D-8B2E-5F6A7C8D9E01}.Release|x64.ActiveCfg = Release|Any CPU
+		{C9E1D2A4-7F3B-4A6D-8B2E-5F6A7C8D9E01}.Release|x64.Build.0 = Release|Any CPU
+		{C9E1D2A4-7F3B-4A6D-8B2E-5F6A7C8D9E01}.Release|x86.ActiveCfg = Release|Any CPU
+		{C9E1D2A4-7F3B-4A6D-8B2E-5F6A7C8D9E01}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -148,5 +162,6 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{3240106D-0BBC-4CF8-A08A-C55531B4631C} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{A7C9E4F2-5B1D-4E8A-9C3F-1D2E3F4A5B6C} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{C9E1D2A4-7F3B-4A6D-8B2E-5F6A7C8D9E01} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal
