@@ -34,6 +34,8 @@ public sealed class GraphCanvas : Control
     private Point _panStartValue;
     private (VSNode Node, string Pin)? _linkSource;
     private Point? _linkCursor;
+    private Connection? _detachedConn;
+    private bool _dragUndoPending;
     private readonly HashSet<string> _activeNodes = new(StringComparer.Ordinal);
 
     public event Action? SelectionChanged;
@@ -57,6 +59,10 @@ public sealed class GraphCanvas : Control
             _selectedNode = null;
             _selectedWire = null;
             _linkSource = null;
+            _detachedConn = null;
+            _dragNode = null;
+            _dragUndoPending = false;
+            _panning = false;
             _activeNodes.Clear();
             SelectionChanged?.Invoke();
             InvalidateVisual();
@@ -164,7 +170,7 @@ public sealed class GraphCanvas : Control
     private (VSNode Node, Pin Pin)? HitPin(Point world)
     {
         if (_graph is null) return null;
-        double r = PinRadius + 3 / _zoom;
+        double r = Math.Min(PinRadius + 3 / _zoom, PinRow / 2 - 1);
         foreach (VSNode node in _graph.Nodes)
         {
             foreach (Pin pin in node.Pins)
@@ -245,8 +251,9 @@ public sealed class GraphCanvas : Control
 
         if (point.Properties.IsLeftButtonPressed || point.Properties.IsMiddleButtonPressed)
         {
+            bool left = point.Properties.IsLeftButtonPressed;
             (VSNode Node, Pin Pin)? pinHit = HitPin(world);
-            if (pinHit is { } hit && point.Properties.IsLeftButtonPressed)
+            if (left && pinHit is { } hit)
             {
                 var (node, pin) = hit;
                 if (pin.Direction == PinDirection.Output)
@@ -258,39 +265,40 @@ public sealed class GraphCanvas : Control
                     return;
                 }
 
-                // input pin: detach existing wire for rewiring, else start from its source
+                // input pin: detach existing wire for rewiring (restored on cancel),
+                // else fall through and treat the press as a node press
                 if (_graph is not null && _graph.FindInputConnection(node.Id, pin.Name) is Connection existing)
                 {
+                    BeforeGraphEdit?.Invoke();
                     _graph.Connections.Remove(existing);
+                    _detachedConn = existing;
                     _linkSource = (_graph.FindNode(existing.FromNode)!, existing.FromPin);
                     GraphEdited?.Invoke();
+                    _linkCursor = screen;
+                    e.Pointer.Capture(this);
+                    InvalidateVisual();
+                    return;
                 }
-                else if (pin.Kind == PinKind.Exec)
-                {
-                    // exec inputs have no literal; ignore empty clicks
-                }
-                _linkCursor = screen;
+            }
+
+            // nodes are drawn above wires, so they must also win hit-testing
+            VSNode? pressNode = left ? (pinHit is { } ph ? ph.Node : HitNode(world)) : null;
+            if (left && pressNode is not null)
+            {
+                Select(pressNode);
+                _dragNode = pressNode;
+                _dragOffset = new Point(world.X - pressNode.X, world.Y - pressNode.Y);
+                _dragUndoPending = true;
                 e.Pointer.Capture(this);
-                InvalidateVisual();
                 return;
             }
 
-            if (point.Properties.IsLeftButtonPressed && HitWire(screen) is Connection wire)
+            if (left && HitWire(screen) is Connection wire)
             {
                 _selectedWire = wire;
                 _selectedNode = null;
                 SelectionChanged?.Invoke();
                 InvalidateVisual();
-                return;
-            }
-
-            if (point.Properties.IsLeftButtonPressed && HitNode(world) is VSNode node2)
-            {
-                Select(node2);
-                BeforeGraphEdit?.Invoke();
-                _dragNode = node2;
-                _dragOffset = new Point(world.X - node2.X, world.Y - node2.Y);
-                e.Pointer.Capture(this);
                 return;
             }
 
@@ -306,9 +314,7 @@ public sealed class GraphCanvas : Control
         }
         else if (point.Properties.IsRightButtonPressed)
         {
-            _linkSource = null;
-            _linkCursor = null;
-            InvalidateVisual();
+            CancelLink();
         }
     }
 
@@ -327,9 +333,19 @@ public sealed class GraphCanvas : Control
         if (_dragNode is not null)
         {
             Point world = ToWorld(screen);
-            _dragNode.X = Math.Round(world.X - _dragOffset.X);
-            _dragNode.Y = Math.Round(world.Y - _dragOffset.Y);
-            InvalidateVisual();
+            double nx = Math.Round(world.X - _dragOffset.X);
+            double ny = Math.Round(world.Y - _dragOffset.Y);
+            if (nx != _dragNode.X || ny != _dragNode.Y)
+            {
+                if (_dragUndoPending)
+                {
+                    BeforeGraphEdit?.Invoke();
+                    _dragUndoPending = false;
+                }
+                _dragNode.X = nx;
+                _dragNode.Y = ny;
+                InvalidateVisual();
+            }
             return;
         }
 
@@ -345,12 +361,13 @@ public sealed class GraphCanvas : Control
 
     private void UpdateCursor(Point screen)
     {
-        (VSNode Node, Pin Pin)? hit = HitPin(ToWorld(screen));
+        Point world = ToWorld(screen);
+        (VSNode Node, Pin Pin)? hit = HitPin(world);
         if (hit is { } h)
         {
             Cursor = new Cursor(h.Pin.Direction == PinDirection.Output ? StandardCursorType.Hand : StandardCursorType.Cross);
         }
-        else if (HitWire(screen) is not null)
+        else if (HitNode(world) is null && HitWire(screen) is not null)
         {
             Cursor = new Cursor(StandardCursorType.Hand);
         }
@@ -368,12 +385,13 @@ public sealed class GraphCanvas : Control
         if (_linkSource is { } link)
         {
             Point screen = e.GetPosition(this);
-            if (HitPin(ToWorld(screen)) is { } target &&
+            Connection? detach = _detachedConn;
+            _detachedConn = null;
+            bool connected = HitPin(ToWorld(screen)) is { } target &&
                 target.Pin.Direction == PinDirection.Input &&
-                TryConnect(link.Node, link.Pin, target.Node, target.Pin.Name))
-            {
-                // connected
-            }
+                TryConnect(link.Node, link.Pin, target.Node, target.Pin.Name, pushUndo: detach is null);
+            if (!connected && detach is not null && _graph is not null && !_graph.Connections.Contains(detach))
+                _graph.Connections.Add(detach);
             _linkSource = null;
             _linkCursor = null;
             InvalidateVisual();
@@ -382,23 +400,38 @@ public sealed class GraphCanvas : Control
 
         if (_dragNode is not null)
         {
+            bool moved = !_dragUndoPending;
             _dragNode = null;
-            GraphEdited?.Invoke();
+            _dragUndoPending = false;
+            if (moved)
+                GraphEdited?.Invoke();
             return;
         }
 
         _panning = false;
     }
 
+    /// <summary>Cancels an in-progress wire drag, restoring a detached connection.</summary>
+    private void CancelLink()
+    {
+        if (_detachedConn is not null && _graph is not null && !_graph.Connections.Contains(_detachedConn))
+            _graph.Connections.Add(_detachedConn);
+        _detachedConn = null;
+        _linkSource = null;
+        _linkCursor = null;
+        InvalidateVisual();
+    }
+
     /// <summary>Validates and adds a wire; reports failures via no-op (validation list).</summary>
-    public bool TryConnect(VSNode from, string fromPin, VSNode to, string toPin)
+    public bool TryConnect(VSNode from, string fromPin, VSNode to, string toPin, bool pushUndo = true)
     {
         if (_graph is null) return false;
         Pin? outPin = from.GetPin(fromPin);
         Pin? inPin = to.GetPin(toPin);
         if (!GraphValidator.CanConnect(outPin, inPin))
             return false;
-        BeforeGraphEdit?.Invoke();
+        if (pushUndo)
+            BeforeGraphEdit?.Invoke();
         _graph.AddConnection(from, fromPin, to, toPin);
         _selectedWire = null;
         GraphEdited?.Invoke();
@@ -502,11 +535,9 @@ public sealed class GraphCanvas : Control
             DeleteSelection();
             e.Handled = true;
         }
-        else if (e.Key == Key.Escape && _linkSource is not null)
+        else if (e.Key == Key.Escape && (_linkSource is not null || _detachedConn is not null))
         {
-            _linkSource = null;
-            _linkCursor = null;
-            InvalidateVisual();
+            CancelLink();
             e.Handled = true;
         }
     }
