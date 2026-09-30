@@ -7,6 +7,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Lumo.Runtime</RootNamespace>
     <AssemblyName>Lumo.Runtime</AssemblyName>
+    <ApplicationIcon>..\Lumo.Editor\Assets\lumo_icon.ico</ApplicationIcon>
     <NoWarn>NU1903</NoWarn>
     <AvaloniaUseDownoadedNativeAssets>true</AvaloniaUseDownoadedNativeAssets>
     <AvaloniaBuildServicesDisabled>true</AvaloniaBuildServicesDisabled>
@@ -21,6 +22,8 @@
     <!-- Lumo logo for the loading screen (shared with the editor's assets). -->
     <EmbeddedResource Include="..\Lumo.Editor\Assets\lumo_logo_transparent.png"
                       LogicalName="Lumo.Runtime.lumo_logo_transparent.png" />
+    <EmbeddedResource Include="..\Lumo.Editor\Assets\lumo_icon.png"
+                      LogicalName="Lumo.Runtime.lumo_icon.png" />
   </ItemGroup>
 
   <ItemGroup>

@@ -7,6 +7,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Lumo.Editor</RootNamespace>
     <AssemblyName>Lumo.Editor</AssemblyName>
+    <ApplicationIcon>Assets\lumo_icon.ico</ApplicationIcon>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <NoWarn>NU1903</NoWarn>
     <AvaloniaUseDownoadedNativeAssets>true</AvaloniaUseDownoadedNativeAssets>
