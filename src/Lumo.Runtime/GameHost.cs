@@ -52,6 +52,12 @@ public static class GameHost
             Height = 720,
             Content = view
         };
+        try
+        {
+            using var icon = typeof(GameHost).Assembly.GetManifestResourceStream("Lumo.Runtime.lumo_icon.png");
+            if (icon != null) window.Icon = new WindowIcon(icon);
+        }
+        catch { }
 
         window.Opened += (_, _) =>
         {

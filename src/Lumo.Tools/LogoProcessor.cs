@@ -89,32 +89,70 @@ public static class LogoProcessor
     }
 
     /// <summary>
-    /// Create a proper app icon with a nice colored circle background.
+    /// Create a window icon: the logo on a rounded dark tile (white mark stays
+    /// visible on both light and dark surfaces).
     /// </summary>
-    public static void CreateIcon(string transparentPath, string iconPath, int size = 64)
+    public static void CreateIcon(string inputPath, string iconPath, int size = 64)
     {
-        using var original = SKBitmap.Decode(transparentPath);
-        using var resized = original.Resize(new SKImageInfo(size, size), SKFilterQuality.High);
+        using var original = SKBitmap.Decode(inputPath);
+        byte[] png = EncodeRounded(original, size);
+        File.WriteAllBytes(iconPath, png);
+        Console.WriteLine($"Icon created: {iconPath} ({size}x{size})");
+    }
 
+    /// <summary>
+    /// Create a multi-size .ico (16..256) for the executable file icon.
+    /// </summary>
+    public static void CreateIco(string inputPath, string icoPath)
+    {
+        int[] sizes = [16, 24, 32, 48, 64, 128, 256];
+        using var original = SKBitmap.Decode(inputPath);
+
+        var frames = new List<byte[]>(sizes.Length);
+        foreach (int s in sizes)
+            frames.Add(EncodeRounded(original, s));
+
+        using var fs = File.Create(icoPath);
+        using var w = new BinaryWriter(fs);
+        w.Write((ushort)0);                       // reserved
+        w.Write((ushort)1);                       // type: icon
+        w.Write((ushort)sizes.Length);
+        int offset = 6 + 16 * sizes.Length;
+        for (int i = 0; i < sizes.Length; i++)
+        {
+            w.Write((byte)(sizes[i] >= 256 ? 0 : sizes[i]));   // width
+            w.Write((byte)(sizes[i] >= 256 ? 0 : sizes[i]));   // height
+            w.Write((byte)0);                       // palette
+            w.Write((byte)0);                       // reserved
+            w.Write((ushort)1);                     // planes
+            w.Write((ushort)32);                    // bit count
+            w.Write(frames[i].Length);
+            w.Write(offset);
+            offset += frames[i].Length;
+        }
+        foreach (byte[] frame in frames)
+            w.Write(frame);
+
+        Console.WriteLine($"Icon created: {icoPath} ({string.Join(", ", sizes.Select(s => s + "px"))})");
+    }
+
+    /// <summary>Render the source bitmap scaled into a rounded-corner tile with a transparent outside.</summary>
+    private static byte[] EncodeRounded(SKBitmap source, int size)
+    {
         using var surface = SKSurface.Create(new SKImageInfo(size, size));
         var canvas = surface.Canvas;
+        canvas.Clear(SKColors.Transparent);
 
-        // Draw nice blue circle background
-        using var bgPaint = new SKPaint
-        {
-            Color = new SKColor(0, 80, 180),
-            IsAntialias = true,
-        };
-        canvas.DrawCircle(size / 2f, size / 2f, size / 2f - 2, bgPaint);
+        float r = size * 0.18f;
+        using var clip = new SKPath();
+        clip.AddRoundRect(new SKRect(0, 0, size, size), r, r);
+        canvas.ClipPath(clip);
 
-        // Draw the logo on top
-        canvas.DrawBitmap(resized, 0, 0);
+        using (var paint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.High })
+            canvas.DrawBitmap(source, new SKRect(0, 0, size, size), paint);
 
         using var image = surface.Snapshot();
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-        using var stream = File.OpenWrite(iconPath);
-        data.SaveTo(stream);
-
-        Console.WriteLine($"Icon created: {iconPath} ({size}x{size})");
+        return data.ToArray();
     }
 }
