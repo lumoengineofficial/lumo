@@ -69,6 +69,9 @@ public class WorkView : UserControl
     private string _selectedFolder = "";
     private string _hierarchySearch = "";
     private string _fileFilter = "";
+    private string _fsRoot = "";
+    private bool _fsSortDesc;
+    private TextBlock? _fsPathLabel;
     private string _activeTool = "Move";
     private bool _showGrid = true;
     private bool _showGizmos = true;
@@ -598,27 +601,41 @@ public class WorkView : UserControl
         };
 
         var pathRow = new DockPanel { Height = 30, Margin = new Thickness(8, 4, 8, 2) };
-        var newFolderBtn = UiTheme.IconBtn(Icons.FolderOutline, () => { }, 14);
+        var newFolderBtn = UiTheme.IconBtn(Icons.FolderOutline, CreateFolder, 14);
         DockPanel.SetDock(newFolderBtn, Dock.Right);
-        var backBtn = UiTheme.IconBtn(Icons.ChevronRight, () => { }, 13);
+        var backBtn = UiTheme.IconBtn(Icons.ChevronLeft, () =>
+        {
+            if (!string.IsNullOrEmpty(_fsRoot) && !_fsRoot.Equals(_project.Path, StringComparison.OrdinalIgnoreCase))
+                GoToFolder(Path.GetDirectoryName(_fsRoot) ?? _project.Path);
+        }, 13);
+        DockPanel.SetDock(backBtn, Dock.Left);
+        _fsPathLabel = UiTheme.Txt("res://", 11, UiTheme.Text);
         var pathBox = new Border
         {
             Background = UiTheme.B(UiTheme.Bg), BorderBrush = UiTheme.B(UiTheme.Border), BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(5), Padding = new Thickness(8, 4), Margin = new Thickness(6, 0),
-            Child = UiTheme.Txt("res://", 11, UiTheme.Text),
+            Child = _fsPathLabel,
+            Cursor = new Cursor(StandardCursorType.Hand),
         };
+        pathBox.PointerPressed += (_, _) => GoToFolder(_project.Path);
         var importBtn = UiTheme.IconBtn(Icons.Upload, () => _ = ImportAssetAsync(), 14);
         DockPanel.SetDock(importBtn, Dock.Right);
+        pathRow.Children.Add(backBtn);
         pathRow.Children.Add(newFolderBtn);
         pathRow.Children.Add(importBtn);
         pathRow.Children.Add(pathBox);
 
         var filterRow = new DockPanel { Height = 30, Margin = new Thickness(8, 0, 8, 4) };
-        var sortBtn = UiTheme.IconBtn(Icons.Dots, () => { }, 14);
+        var sortBtn = UiTheme.IconBtn(Icons.Dots, () =>
+        {
+            _fsSortDesc = !_fsSortDesc;
+            RefreshFileTree();
+            Log(_fsSortDesc ? "File list sorted Z→A." : "File list sorted A→Z.");
+        }, 14);
         DockPanel.SetDock(sortBtn, Dock.Right);
         var filter = new TextBox
         {
-            Watermark = "Filter Files", FontSize = 11, Height = 26,
+            Watermark = "Filter Files", FontSize = 11, Height = 26, Text = _fileFilter,
             Background = UiTheme.B(UiTheme.Bg), Foreground = UiTheme.B(UiTheme.Text),
             BorderBrush = UiTheme.B(UiTheme.Border), BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(5), Padding = new Thickness(8, 3), Margin = new Thickness(0, 0, 6, 0),
@@ -668,17 +685,35 @@ public class WorkView : UserControl
     private void RefreshFileTree()
     {
         if (_fileTreeList == null) return;
-        _fileTreeList.Children.Clear();
+        if (string.IsNullOrEmpty(_fsRoot) || !Directory.Exists(_fsRoot))
+            _fsRoot = _project.Path;
 
+        _fileTreeList.Children.Clear();
         _fileTreeList.Children.Add(FsRow("Favorites", Icons.Star, 0, header: true));
 
         string root = _project.Path;
-        string label = string.IsNullOrEmpty(root) ? "res://" : "res://";
-        _fileTreeList.Children.Add(FsRow(label, Icons.FolderOutline, 0, path: root, isFolder: true));
+        if (_fsPathLabel != null)
+        {
+            string rel = Path.GetRelativePath(root, _fsRoot);
+            _fsPathLabel.Text = rel == "." ? "res://" : "res://" + rel.Replace('\\', '/') + "/";
+        }
+        _fileTreeList.Children.Add(FsRow("res://", Icons.FolderOutline, 0, path: root, isFolder: true));
 
         if (!Directory.Exists(root)) return;
 
-        var dirs = Directory.GetDirectories(root).Where(d => !d.EndsWith("bin") && !d.EndsWith("obj")).OrderBy(Path.GetFileName);
+        if (!string.Equals(_fsRoot, root, StringComparison.OrdinalIgnoreCase))
+            _fileTreeList.Children.Add(FsRow("../", Icons.FolderOutline, 1, path: Path.GetDirectoryName(_fsRoot) ?? root, isFolder: true));
+
+        IEnumerable<string> dirs = Directory.GetDirectories(_fsRoot)
+            .Where(d => !d.EndsWith("bin") && !d.EndsWith("obj"))
+            .OrderBy(Path.GetFileName);
+        IEnumerable<string> files = Directory.GetFiles(_fsRoot).OrderBy(Path.GetFileName);
+        if (_fsSortDesc)
+        {
+            dirs = dirs.Reverse();
+            files = files.Reverse();
+        }
+
         foreach (var d in dirs)
         {
             var name = Path.GetFileName(d);
@@ -686,13 +721,45 @@ public class WorkView : UserControl
             _fileTreeList.Children.Add(FsRow(name + "/", Icons.FolderOutline, 1, path: d, isFolder: true));
         }
 
-        var files = Directory.GetFiles(root).OrderBy(Path.GetFileName);
         foreach (var f in files)
         {
             var name = Path.GetFileName(f);
             if (_fileFilter.Length > 0 && !name.Contains(_fileFilter, StringComparison.OrdinalIgnoreCase)) continue;
             var ext = Path.GetExtension(f).ToLowerInvariant();
             _fileTreeList.Children.Add(FsRow(name, ext == ".cs" ? Icons.Code : Icons.File, 1, path: f, isFolder: false));
+        }
+    }
+
+    private void GoToFolder(string path)
+    {
+        if (!Directory.Exists(path)) return;
+        _fsRoot = path;
+        _selectedFolder = path;
+        RefreshFileTree();
+    }
+
+    private void CreateFolder()
+    {
+        try
+        {
+            string baseDir = string.IsNullOrEmpty(_fsRoot) ? _project.Path : _fsRoot;
+            if (!Directory.Exists(baseDir)) return;
+            string name = "New Folder";
+            string candidate = Path.Combine(baseDir, name);
+            int i = 2;
+            while (Directory.Exists(candidate) || File.Exists(candidate))
+            {
+                name = $"New Folder {i++}";
+                candidate = Path.Combine(baseDir, name);
+            }
+            Directory.CreateDirectory(candidate);
+            _selectedFolder = candidate;
+            RefreshFileTree();
+            Log($"Created {Path.GetRelativePath(_project.Path, candidate).Replace('\\', '/')}/");
+        }
+        catch (Exception ex)
+        {
+            Log($"New folder failed: {ex.Message}");
         }
     }
 
@@ -722,14 +789,16 @@ public class WorkView : UserControl
         {
             row.PointerPressed += (_, _) =>
             {
-                _selectedFolder = path;
-                if (!isFolder)
+                if (isFolder)
                 {
-                    var ext = Path.GetExtension(path).ToLowerInvariant();
-                    if (ext == ".cs") { OpenScript(path); SetTopMode("Script"); }
-                    else if (ext == ".obj") ImportObjFile(path);
-                    else Log($"Opened {Path.GetFileName(path)}");
+                    GoToFolder(path!);
+                    return;
                 }
+                _selectedFolder = path;
+                var ext = Path.GetExtension(path).ToLowerInvariant();
+                if (ext == ".cs") { OpenScript(path); SetTopMode("Script"); }
+                else if (ext == ".obj") ImportObjFile(path);
+                else Log($"Opened {Path.GetFileName(path)}");
                 RefreshFileTree();
             };
         }
