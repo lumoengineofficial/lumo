@@ -20,6 +20,7 @@ using Lumo.Plugins;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -124,9 +125,10 @@ public class WorkView : UserControl
         }
         _selectedEntity = _scene.AllEntities.FirstOrDefault();
 
-        // Models imported earlier live as .obj under Assets/ — re-register them
-        // so MeshRenderer components keep resolving after a restart.
-        int meshes = ObjImporter.RegisterDirectory(Path.Combine(_project.Path, "Assets"));
+        // Models imported earlier live as .obj / .gltf under Assets/ — re-register
+        // them so MeshRenderer components keep resolving after a restart.
+        string assetsDir = Path.Combine(_project.Path, "Assets");
+        int meshes = ObjImporter.RegisterDirectory(assetsDir) + GltfImporter.RegisterDirectory(assetsDir);
         if (meshes > 0)
             Log($"Registered {meshes} mesh(es) from Assets.");
     }
@@ -564,7 +566,7 @@ public class WorkView : UserControl
 
         var importBtn = new Button
         {
-            Content = UiTheme.Txt("Import 3D Model (.obj)…", 11, UiTheme.Text),
+            Content = UiTheme.Txt("Import 3D Model (.obj / .gltf)…", 11, UiTheme.Text),
             Background = UiTheme.B(UiTheme.Panel),
             BorderBrush = UiTheme.B(UiTheme.Border),
             BorderThickness = new Thickness(1),
@@ -577,7 +579,7 @@ public class WorkView : UserControl
         stack.Children.Add(importBtn);
 
         stack.Children.Add(UiTheme.TxtAt(
-            "Copies the file to Assets/, registers the mesh and spawns an entity. Click an .obj in the FileSystem panel to import it too.",
+            "Copies the file (and a glTF's .bin/textures) to Assets/, registers the mesh and spawns an entity. Click an .obj or .gltf in the FileSystem panel to import it too.",
             10, UiTheme.Faint, FontWeight.Normal, HorizontalAlignment.Left));
 
         stack.Children.Add(UiTheme.Txt("Registered meshes", 11, UiTheme.Dim));
@@ -798,6 +800,7 @@ public class WorkView : UserControl
                 var ext = Path.GetExtension(path).ToLowerInvariant();
                 if (ext == ".cs") { OpenScript(path); SetTopMode("Script"); }
                 else if (ext == ".obj") ImportObjFile(path);
+                else if (ext == ".gltf") ImportGltfFile(path);
                 else Log($"Opened {Path.GetFileName(path)}");
                 RefreshFileTree();
             };
@@ -1216,9 +1219,33 @@ public class WorkView : UserControl
 
         var t = InsSection("Transform");
         var eul = e.Transform.GetEulerAngles();
-        Vec3Row(t, "Position", e.Transform.Position.X, e.Transform.Position.Y, e.Transform.Position.Z);
-        Vec3Row(t, "Rotation", eul.X, eul.Y, eul.Z);
-        Vec3Row(t, "Scale", e.Transform.Scale.X, e.Transform.Scale.Y, e.Transform.Scale.Z);
+        Vec3Row(t, "Position", e.Transform.Position.X, e.Transform.Position.Y, e.Transform.Position.Z,
+            (axis, val) =>
+            {
+                PushSceneUndo();
+                var p = e.Transform.Position;
+                if (axis == 0) p.X = val; else if (axis == 1) p.Y = val; else p.Z = val;
+                e.Transform.Position = p;
+                AfterTransformEdit();
+            });
+        Vec3Row(t, "Rotation", eul.X, eul.Y, eul.Z,
+            (axis, val) =>
+            {
+                PushSceneUndo();
+                var r = e.Transform.GetEulerAngles();
+                if (axis == 0) r.X = val; else if (axis == 1) r.Y = val; else r.Z = val;
+                e.Transform.SetRotationFromEuler(r.X, r.Y, r.Z);
+                AfterTransformEdit();
+            });
+        Vec3Row(t, "Scale", e.Transform.Scale.X, e.Transform.Scale.Y, e.Transform.Scale.Z,
+            (axis, val) =>
+            {
+                PushSceneUndo();
+                var s = e.Transform.Scale;
+                if (axis == 0) s.X = val; else if (axis == 1) s.Y = val; else s.Z = val;
+                e.Transform.Scale = s;
+                AfterTransformEdit();
+            });
         _inspectorContent.Children.Add(t);
 
         if (e.MeshRenderer != null)
@@ -1297,7 +1324,13 @@ public class WorkView : UserControl
         });
     }
 
-    private static void Vec3Row(StackPanel section, string label, float x, float y, float z)
+    private void AfterTransformEdit()
+    {
+        RefreshInspector();
+        _softwareViewport?.InvalidateVisual();
+    }
+
+    private static void Vec3Row(StackPanel section, string label, float x, float y, float z, Action<int, float>? commit = null)
     {
         section.Children.Add(UiTheme.TxtAt(label, 11, UiTheme.Dim, FontWeight.Normal, HorizontalAlignment.Left, new Thickness(12, 6, 0, 3)));
         var grid = new Grid
@@ -1305,24 +1338,50 @@ public class WorkView : UserControl
             ColumnDefinitions = { new ColumnDefinition(new GridLength(1, GridUnitType.Star)), new ColumnDefinition(new GridLength(1, GridUnitType.Star)), new ColumnDefinition(new GridLength(1, GridUnitType.Star)) },
             Margin = new Thickness(12, 0, 12, 4),
         };
-        void Add(int col, string axis, float val, Color c)
+        void Add(int col, string axis, float val, Color c, int axisIndex)
         {
+            bool committed = false;
+            var box = new TextBox
+            {
+                Text = val.ToString("F2", CultureInfo.InvariantCulture),
+                FontSize = 11,
+                Foreground = UiTheme.B(UiTheme.Text),
+                CaretBrush = UiTheme.B(UiTheme.Text),
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(0),
+                MinWidth = 34,
+            };
+            void TryCommit()
+            {
+                if (committed || commit == null) return;
+                if (!float.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var nv)) return;
+                if (MathF.Abs(nv - val) < 1e-4f) return;
+                committed = true;
+                commit(axisIndex, nv);
+            }
+            box.KeyDown += (_, ke) =>
+            {
+                if (ke.Key == Key.Enter) { TryCommit(); ke.Handled = true; }
+            };
+            box.LostFocus += (_, _) => TryCommit();
+
             var cell = new Border
             {
                 Background = UiTheme.B(UiTheme.Bg),
                 BorderBrush = UiTheme.B(UiTheme.Border),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(5),
-                Padding = new Thickness(7, 4),
+                Padding = new Thickness(7, 2),
                 Margin = new Thickness(0, 0, 5, 0),
-                Child = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7, Children = { UiTheme.Txt(axis, 10, c, FontWeight.Bold), UiTheme.Txt(val.ToString("F2"), 11, UiTheme.Text) } },
+                Child = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7, Children = { UiTheme.Txt(axis, 10, c, FontWeight.Bold), box } },
             };
             Grid.SetColumn(cell, col);
             grid.Children.Add(cell);
         }
-        Add(0, "X", x, Color.Parse("#e06666"));
-        Add(1, "Y", y, Color.Parse("#66c266"));
-        Add(2, "Z", z, Color.Parse("#6699e6"));
+        Add(0, "X", x, Color.Parse("#e06666"), 0);
+        Add(1, "Y", y, Color.Parse("#66c266"), 1);
+        Add(2, "Z", z, Color.Parse("#6699e6"), 2);
         section.Children.Add(grid);
     }
 
@@ -2055,7 +2114,7 @@ public class WorkView : UserControl
                 AllowMultiple = false,
                 FileTypeFilter =
                 [
-                    new FilePickerFileType("3D Models") { Patterns = ["*.obj"] },
+                    new FilePickerFileType("3D Models") { Patterns = ["*.obj", "*.gltf"] },
                     new FilePickerFileType("All Files") { Patterns = ["*.*"] },
                 ],
             });
@@ -2064,13 +2123,14 @@ public class WorkView : UserControl
             var path = files[0].TryGetLocalPath();
             if (path == null) { Log("Could not resolve file path."); return; }
 
-            if (Path.GetExtension(path).ToLowerInvariant() != ".obj")
+            string ext = Path.GetExtension(path).ToLowerInvariant();
+            if (ext == ".obj") ImportObjFile(path);
+            else if (ext == ".gltf") ImportGltfFile(path);
+            else
             {
-                Log($"Unsupported format: {Path.GetExtension(path)} (OBJ supported).");
+                Log($"Unsupported format: {ext} (OBJ/glTF supported).");
                 return;
             }
-
-            ImportObjFile(path);
         }
         catch (Exception ex) { Log($"Import failed: {ex.Message}"); }
     }
@@ -2155,6 +2215,65 @@ public class WorkView : UserControl
             Log($"Imported {mesh.Name}: {mesh.VertexCount} verts, {mesh.TriangleCount} tris → {Path.GetRelativePath(_project.Path, stored)}");
         }
         catch (Exception ex) { Log($"OBJ import failed: {ex.Message}"); }
+    }
+
+    private void ImportGltfFile(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                // The picked "file" is a package folder — take the model inside it.
+                string? inside = Directory.GetFiles(path, "*.gltf", SearchOption.TopDirectoryOnly).FirstOrDefault();
+                if (inside == null) { Log("No .gltf found in that folder."); return; }
+                path = inside;
+            }
+
+            string assetsDir = Path.Combine(_project.Path, "Assets");
+            Directory.CreateDirectory(assetsDir);
+            string source = Path.GetFullPath(path);
+            string stored = source;
+
+            if (!source.StartsWith(assetsDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                // Copy the whole package (.gltf + .bin + textures) preserving relative paths.
+                string pkgName = Path.GetFileNameWithoutExtension(source);
+                string pkgDir = Path.Combine(assetsDir, pkgName);
+                for (int n = 1; Directory.Exists(pkgDir); n++)
+                    pkgDir = Path.Combine(assetsDir, $"{pkgName}_{n}");
+                Directory.CreateDirectory(pkgDir);
+
+                string srcDir = Path.GetDirectoryName(source)!;
+                foreach (string uri in GltfImporter.GetReferencedUris(source))
+                {
+                    string from = Path.GetFullPath(Path.Combine(srcDir, Uri.UnescapeDataString(uri)));
+                    string to = Path.GetFullPath(Path.Combine(pkgDir, Uri.UnescapeDataString(uri)));
+                    if (!to.StartsWith(pkgDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!File.Exists(from)) continue;
+                    Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+                    File.Copy(from, to, true);
+                }
+
+                stored = Path.Combine(pkgDir, Path.GetFileName(source));
+                File.Copy(source, stored, true);
+            }
+
+            var mesh = GltfImporter.Load(stored, out int originalTris);
+            MeshLibrary.Register(mesh);
+
+            PushSceneUndo();
+            var entity = _scene.CreateEntity(mesh.Name);
+            entity.MeshRenderer = new MeshRendererComponent { MeshName = mesh.Name };
+
+            _selectedEntity = entity;
+            RefreshHierarchy();
+            RefreshInspector();
+            RefreshFileTree();
+            SaveProject();
+            string reduced = originalTris > mesh.TriangleCount ? $" (reduced from {originalTris} tris)" : "";
+            Log($"Imported {mesh.Name}: {mesh.VertexCount} verts, {mesh.TriangleCount} tris{reduced} → {Path.GetRelativePath(_project.Path, stored)}");
+        }
+        catch (Exception ex) { Log($"glTF import failed: {ex.Message}"); }
     }
 
     // ---------- Keyboard (play mode) ----------

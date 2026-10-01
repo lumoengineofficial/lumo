@@ -567,39 +567,47 @@ public class SoftwareViewport : Control
             world[i] = Vector3.Transform(v, m);
         }
 
-        var tris = new List<(float depth, int a, int b, int c)>(idx.Length / 3);
+        // Project once, cull behind-camera and fully off-screen triangles, then sort.
+        var tris = new List<(float depth, int a, int b, int c, float x0, float y0, float x1, float y1, float x2, float y2)>(
+            Math.Min(idx.Length / 3, 64 * 1024));
         for (int i = 0; i + 2 < idx.Length; i += 3)
         {
-            var a = world[idx[i]];
-            var b = world[idx[i + 1]];
-            var c = world[idx[i + 2]];
-            var mid = (a + b + c) / 3f;
+            int ai = (int)idx[i], bi = (int)idx[i + 1], ci = (int)idx[i + 2];
+            var mid = (world[ai] + world[bi] + world[ci]) / 3f;
             var viewPos = Vector4.Transform(new Vector4(mid, 1), view);
             if (viewPos.W <= 0.001f) continue;
-            tris.Add((viewPos.Z, (int)idx[i], (int)idx[i + 1], (int)idx[i + 2]));
-        }
-        tris.Sort((x, y) => y.depth.CompareTo(x.depth));
 
-        foreach (var (_, ai, bi, ci) in tris)
-        {
             var p0 = Project(world[ai], view, proj, w, h);
             var p1 = Project(world[bi], view, proj, w, h);
             var p2 = Project(world[ci], view, proj, w, h);
             if (p0.X < -9000 || p1.X < -9000 || p2.X < -9000) continue;
+            if ((p0.X < 0 && p1.X < 0 && p2.X < 0) ||
+                (p0.X >= w && p1.X >= w && p2.X >= w) ||
+                (p0.Y < 0 && p1.Y < 0 && p2.Y < 0) ||
+                (p0.Y >= h && p1.Y >= h && p2.Y >= h)) continue;
 
+            tris.Add((viewPos.Z, ai, bi, ci, p0.X, p0.Y, p1.X, p1.Y, p2.X, p2.Y));
+        }
+        tris.Sort((x, y) => y.depth.CompareTo(x.depth));
+
+        // Dense meshes render solid; stroking every triangle is too expensive.
+        Pen? fillEdge = idx.Length > 10_000 ? null : edge;
+
+        foreach (var (_, ai, bi, ci, x0, y0, x1, y1, x2, y2) in tris)
+        {
             var geo = new StreamGeometry();
             using (var gc = geo.Open())
             {
-                gc.BeginFigure(new Point(p0.X, p0.Y), true);
-                gc.LineTo(new Point(p1.X, p1.Y));
-                gc.LineTo(new Point(p2.X, p2.Y));
+                gc.BeginFigure(new Point(x0, y0), true);
+                gc.LineTo(new Point(x1, y1));
+                gc.LineTo(new Point(x2, y2));
                 gc.EndFigure(true);
             }
 
             Vector3 normal = Vector3.Normalize(Vector3.Cross(world[bi] - world[ai], world[ci] - world[ai]));
             Vector3 centroid = (world[ai] + world[bi] + world[ci]) / 3f;
             float brightness = shading ? FxLighting.Brightness(normal, camPos - centroid) : 1f;
-            ctx.DrawGeometry(new SolidColorBrush(ShadeColor(baseColor, brightness)), edge, geo);
+            ctx.DrawGeometry(new SolidColorBrush(ShadeColor(baseColor, brightness)), fillEdge, geo);
         }
     }
 
