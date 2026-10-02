@@ -89,6 +89,11 @@ public class WorkView : UserControl
     private MenuFlyout? _editFlyout;
     private bool _exporting;
     private readonly HistoryStack _sceneHistory = new();
+    private static (System.Numerics.Vector3 pos, System.Numerics.Quaternion rot, System.Numerics.Vector3 scale)? _copiedTransform;
+    private bool _snapEnabled = true;
+    private float _moveSnapStep = 0.5f;
+    private float _rotateSnapStep = 15f;
+    private float _scaleSnapStep = 0.25f;
 
     public WorkView(ProjectInfo project, Action<string?> onNavigateHome, Action onClose)
     {
@@ -913,7 +918,13 @@ public class WorkView : UserControl
         {
             string t = tool;
             bool active = t == _activeTool;
-            tools.Children.Add(UiTheme.IconBtn(ic, () => { _activeTool = t; Log($"Tool: {t}"); InvalidateOverlay(); }, 15, active ? UiTheme.Cyan : null));
+            tools.Children.Add(UiTheme.IconBtn(ic, () =>
+            {
+                _activeTool = t;
+                if (_softwareViewport != null) { _softwareViewport.ActiveTool = t; _softwareViewport.InvalidateVisual(); }
+                Log($"Tool: {t}");
+                InvalidateOverlay();
+            }, 15, active ? UiTheme.Cyan : null));
         }
         tools.Children.Add(new Border { Width = 1, Height = 16, Background = UiTheme.B(UiTheme.Border), Margin = new Thickness(6, 0), VerticalAlignment = VerticalAlignment.Center });
         tools.Children.Add(UiTheme.IconBtn(Icons.FilePlus, () => CreateEntity("Empty Actor"), 15));
@@ -946,6 +957,11 @@ public class WorkView : UserControl
         _softwareViewport = new SoftwareViewport();
         _softwareViewport.Mode = _viewMode;
         _softwareViewport.ProjectRoot = _project.Path;
+        _softwareViewport.ActiveTool = _activeTool;
+        _softwareViewport.SnapEnabled = _snapEnabled;
+        _softwareViewport.MoveSnapStep = _moveSnapStep;
+        _softwareViewport.RotateSnapStep = _rotateSnapStep;
+        _softwareViewport.ScaleSnapStep = _scaleSnapStep;
         _softwareViewport.EntityPicked += entity =>
         {
             _selectedEntity = entity;
@@ -993,10 +1009,28 @@ public class WorkView : UserControl
         return _viewportPanel;
     }
 
+    private void FocusSelectedEntity()
+    {
+        if (_selectedEntity != null)
+        {
+            _softwareViewport?.FocusOnEntity(_selectedEntity);
+            _glViewport?.FocusOnEntity(_selectedEntity);
+            Log($"Focused camera on {_selectedEntity.Name}");
+        }
+    }
+
+    private void ResetCameraView()
+    {
+        _softwareViewport?.ResetCamera();
+        _glViewport?.ResetCamera();
+        Log("Reset camera view.");
+    }
+
     private Control BuildViewportOverlay()
     {
         var rightIcons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
         rightIcons.Children.Add(UiTheme.IconBtn(Icons.Camera, CreateCamera, 15));
+        rightIcons.Children.Add(UiTheme.IconBtn(Icons.Eye, FocusSelectedEntity, 15));
         rightIcons.Children.Add(UiTheme.IconBtn(Icons.Bulb, () =>
         {
             _showGizmos = !_showGizmos;
@@ -1218,6 +1252,34 @@ public class WorkView : UserControl
         });
 
         var t = InsSection("Transform");
+        var tHeaderBtns = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(12, 2, 12, 6) };
+        tHeaderBtns.Children.Add(ActionSmall("Copy", () =>
+        {
+            _copiedTransform = (e.Transform.Position, e.Transform.Rotation, e.Transform.Scale);
+            Log("Transform copied.");
+        }));
+        tHeaderBtns.Children.Add(ActionSmall("Paste", () =>
+        {
+            if (_copiedTransform.HasValue)
+            {
+                PushSceneUndo();
+                e.Transform.Position = _copiedTransform.Value.pos;
+                e.Transform.Rotation = _copiedTransform.Value.rot;
+                e.Transform.Scale = _copiedTransform.Value.scale;
+                AfterTransformEdit();
+                Log("Transform pasted.");
+            }
+            else Log("No copied transform.");
+        }));
+        tHeaderBtns.Children.Add(ActionSmall("Reset", () =>
+        {
+            PushSceneUndo();
+            e.Transform.ResetAll();
+            AfterTransformEdit();
+            Log("Transform reset.");
+        }));
+        t.Children.Add(tHeaderBtns);
+
         var eul = e.Transform.GetEulerAngles();
         Vec3Row(t, "Position", e.Transform.Position.X, e.Transform.Position.Y, e.Transform.Position.Z,
             (axis, val) =>
@@ -1227,6 +1289,13 @@ public class WorkView : UserControl
                 if (axis == 0) p.X = val; else if (axis == 1) p.Y = val; else p.Z = val;
                 e.Transform.Position = p;
                 AfterTransformEdit();
+            },
+            () =>
+            {
+                PushSceneUndo();
+                e.Transform.ResetPosition();
+                AfterTransformEdit();
+                Log("Position reset.");
             });
         Vec3Row(t, "Rotation", eul.X, eul.Y, eul.Z,
             (axis, val) =>
@@ -1236,6 +1305,13 @@ public class WorkView : UserControl
                 if (axis == 0) r.X = val; else if (axis == 1) r.Y = val; else r.Z = val;
                 e.Transform.SetRotationFromEuler(r.X, r.Y, r.Z);
                 AfterTransformEdit();
+            },
+            () =>
+            {
+                PushSceneUndo();
+                e.Transform.ResetRotation();
+                AfterTransformEdit();
+                Log("Rotation reset.");
             });
         Vec3Row(t, "Scale", e.Transform.Scale.X, e.Transform.Scale.Y, e.Transform.Scale.Z,
             (axis, val) =>
@@ -1245,6 +1321,13 @@ public class WorkView : UserControl
                 if (axis == 0) s.X = val; else if (axis == 1) s.Y = val; else s.Z = val;
                 e.Transform.Scale = s;
                 AfterTransformEdit();
+            },
+            () =>
+            {
+                PushSceneUndo();
+                e.Transform.ResetScale();
+                AfterTransformEdit();
+                Log("Scale reset.");
             });
         _inspectorContent.Children.Add(t);
 
@@ -1330,9 +1413,26 @@ public class WorkView : UserControl
         _softwareViewport?.InvalidateVisual();
     }
 
-    private static void Vec3Row(StackPanel section, string label, float x, float y, float z, Action<int, float>? commit = null)
+    private static void Vec3Row(StackPanel section, string label, float x, float y, float z, Action<int, float>? commit = null, Action? onReset = null)
     {
-        section.Children.Add(UiTheme.TxtAt(label, 11, UiTheme.Dim, FontWeight.Normal, HorizontalAlignment.Left, new Thickness(12, 6, 0, 3)));
+        var labelRow = new DockPanel { Margin = new Thickness(12, 6, 12, 3) };
+        if (onReset != null)
+        {
+            var rBtn = new Button
+            {
+                Content = UiTheme.Txt("↺", 11, UiTheme.Dim),
+                Background = UiTheme.B(Colors.Transparent),
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(4, 0),
+                Cursor = new Cursor(StandardCursorType.Hand),
+            };
+            rBtn.Click += (_, _) => onReset();
+            DockPanel.SetDock(rBtn, Dock.Right);
+            labelRow.Children.Add(rBtn);
+        }
+        labelRow.Children.Add(UiTheme.Txt(label, 11, UiTheme.Dim));
+        section.Children.Add(labelRow);
+
         var grid = new Grid
         {
             ColumnDefinitions = { new ColumnDefinition(new GridLength(1, GridUnitType.Star)), new ColumnDefinition(new GridLength(1, GridUnitType.Star)), new ColumnDefinition(new GridLength(1, GridUnitType.Star)) },
@@ -2282,6 +2382,12 @@ public class WorkView : UserControl
         base.OnKeyDown(e);
 
         bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        if (e.Key == Key.F && !ctrl)
+        {
+            FocusSelectedEntity();
+            e.Handled = true;
+            return;
+        }
         if (ctrl && !e.KeyModifiers.HasFlag(KeyModifiers.Alt) && e.Key == Key.Z)
         {
             if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) RouteRedo();

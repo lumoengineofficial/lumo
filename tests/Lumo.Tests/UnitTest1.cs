@@ -184,6 +184,38 @@ public class TransformTests
         Assert.True(Math.Abs(forward.X - 1.0f) < 0.1f || Math.Abs(forward.X + 1.0f) < 0.1f,
             $"Forward.X should be near ±1 after 90° yaw, got {forward.X}");
     }
+
+    [Fact]
+    public void Transform_ResetAndCopy()
+    {
+        var t1 = new TransformComponent
+        {
+            Position = new Vector3(5, 10, 15),
+            Scale = new Vector3(2, 2, 2)
+        };
+        t1.SetRotationFromEuler(15, 30, 45);
+
+        var t2 = new TransformComponent();
+        t2.CopyFrom(t1);
+
+        Assert.Equal(t1.Position, t2.Position);
+        Assert.Equal(t1.Rotation, t2.Rotation);
+        Assert.Equal(t1.Scale, t2.Scale);
+
+        t2.ResetPosition();
+        Assert.Equal(Vector3.Zero, t2.Position);
+
+        t2.ResetRotation();
+        Assert.Equal(Quaternion.Identity, t2.Rotation);
+
+        t2.ResetScale();
+        Assert.Equal(Vector3.One, t2.Scale);
+
+        t1.ResetAll();
+        Assert.Equal(Vector3.Zero, t1.Position);
+        Assert.Equal(Quaternion.Identity, t1.Rotation);
+        Assert.Equal(Vector3.One, t1.Scale);
+    }
 }
 
 public class CameraTests
@@ -231,6 +263,38 @@ public class CameraTests
         float afterZoom = Vector3.Distance(cam.Position, cam.Target);
 
         Assert.True(afterZoom > initialDistance);
+    }
+
+    [Fact]
+    public void Camera_Orbit_ZeroDelta_DoesNotFlipPosition()
+    {
+        var cam = new Camera
+        {
+            Position = new Vector3(0, 0, 3),
+            Target = Vector3.Zero
+        };
+
+        cam.Orbit(0, 0);
+        Assert.True(Math.Abs(cam.Position.Z - 3.0f) < 0.05f, $"Expected Z near 3.0, got {cam.Position.Z}");
+        Assert.True(Math.Abs(cam.Position.X) < 0.05f, $"Expected X near 0, got {cam.Position.X}");
+    }
+
+    [Fact]
+    public void Camera_FocusAndReset()
+    {
+        var cam = new Camera
+        {
+            Position = new Vector3(10, 10, 10),
+            Target = Vector3.Zero
+        };
+
+        cam.Focus(new Vector3(5, 5, 5), 4.0f);
+        Assert.Equal(new Vector3(5, 5, 5), cam.Target);
+        Assert.True(Math.Abs(Vector3.Distance(cam.Position, cam.Target) - 4.0f) < 0.01f);
+
+        cam.Reset();
+        Assert.Equal(Vector3.Zero, cam.Target);
+        Assert.Equal(new Vector3(0, 0, 3), cam.Position);
     }
 }
 

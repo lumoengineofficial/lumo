@@ -44,6 +44,12 @@ public class SoftwareViewport : Control
 
     public bool ShowGizmos { get; set; } = true;
 
+    public string ActiveTool { get; set; } = "Move";
+    public bool SnapEnabled { get; set; } = true;
+    public float MoveSnapStep { get; set; } = 0.5f;
+    public float RotateSnapStep { get; set; } = 15f;
+    public float ScaleSnapStep { get; set; } = 0.25f;
+
     /// <summary>Raised on viewport click: picked entity, or null on empty space.</summary>
     public event Action<Entity?>? EntityPicked;
 
@@ -80,6 +86,26 @@ public class SoftwareViewport : Control
     }
 
     public void SetScene(Scene scene) => _scene = scene;
+
+    public void FocusOnEntity(Entity? entity)
+    {
+        if (entity?.Transform != null)
+        {
+            _camTarget = entity.Transform.Position;
+            float bounds = Math.Max(0.5f, MathF.Max(entity.Transform.Scale.X, MathF.Max(entity.Transform.Scale.Y, entity.Transform.Scale.Z)));
+            _camDist = Math.Max(2f, bounds * 3.5f);
+            InvalidateVisual();
+        }
+    }
+
+    public void ResetCamera()
+    {
+        _camTarget = Vector3.Zero;
+        _camDist = 6f;
+        _camYaw = 45f;
+        _camPitch = 25f;
+        InvalidateVisual();
+    }
 
     private void OnPress(object? s, PointerPressedEventArgs e)
     {
@@ -139,7 +165,36 @@ public class SoftwareViewport : Control
             if (world is Vector3 w)
             {
                 var np = w + _dragOffset;
-                _dragEntity.Transform.Position = new Vector3(np.X, np.Y, _dragEntity.Transform.Position.Z);
+                if (ActiveTool == "Rotate")
+                {
+                    float angle = dx * 0.5f;
+                    if (SnapEnabled && RotateSnapStep > 0)
+                        angle = MathF.Round(angle / RotateSnapStep) * RotateSnapStep;
+                    var eul = _dragEntity.Transform.GetEulerAngles();
+                    _dragEntity.Transform.SetRotationFromEuler(eul.X, eul.Y + angle, eul.Z);
+                }
+                else if (ActiveTool == "Scale")
+                {
+                    float factor = 1f + dx * 0.01f;
+                    var sc = _dragEntity.Transform.Scale * factor;
+                    if (SnapEnabled && ScaleSnapStep > 0)
+                    {
+                        sc.X = MathF.Max(0.05f, MathF.Round(sc.X / ScaleSnapStep) * ScaleSnapStep);
+                        sc.Y = MathF.Max(0.05f, MathF.Round(sc.Y / ScaleSnapStep) * ScaleSnapStep);
+                        sc.Z = MathF.Max(0.05f, MathF.Round(sc.Z / ScaleSnapStep) * ScaleSnapStep);
+                    }
+                    _dragEntity.Transform.Scale = sc;
+                }
+                else
+                {
+                    if (SnapEnabled && MoveSnapStep > 0)
+                    {
+                        np.X = MathF.Round(np.X / MoveSnapStep) * MoveSnapStep;
+                        np.Y = MathF.Round(np.Y / MoveSnapStep) * MoveSnapStep;
+                        np.Z = MathF.Round(np.Z / MoveSnapStep) * MoveSnapStep;
+                    }
+                    _dragEntity.Transform.Position = new Vector3(np.X, np.Y, _dragEntity.Transform.Position.Z);
+                }
                 InvalidateVisual();
                 EntityMoved?.Invoke(_dragEntity);
             }
@@ -167,10 +222,9 @@ public class SoftwareViewport : Control
         }
         else if (_panning)
         {
-            float spd = _camDist * 0.002f;
-            float yawR = _camYaw * MathF.PI / 180f;
-            var right = Vector3.Normalize(Vector3.Cross(Vector3.UnitY, new Vector3(MathF.Sin(yawR), 0, MathF.Cos(yawR))));
-            _camTarget += right * dx * spd - Vector3.UnitY * dy * spd;
+            float spd = _camDist * 0.0015f;
+            var (camPos, fwd, right, up) = GetSceneCamera();
+            _camTarget -= right * dx * spd - up * dy * spd;
             InvalidateVisual();
         }
     }
@@ -216,14 +270,14 @@ public class SoftwareViewport : Control
     {
         float yawR = _camYaw * MathF.PI / 180f;
         float pitchR = _camPitch * MathF.PI / 180f;
-        var pos = _camTarget + new Vector3(
+        var cameraPos = _camTarget + new Vector3(
             _camDist * MathF.Cos(pitchR) * MathF.Sin(yawR),
             _camDist * MathF.Sin(pitchR),
             _camDist * MathF.Cos(pitchR) * MathF.Cos(yawR));
-        var fwd = Vector3.Normalize(_camTarget - pos);
+        var fwd = Vector3.Normalize(_camTarget - cameraPos);
         var right = Vector3.Normalize(Vector3.Cross(fwd, Vector3.UnitY));
         var up = Vector3.Normalize(Vector3.Cross(right, fwd));
-        return (pos, fwd, right, up);
+        return (cameraPos, fwd, right, up);
     }
 
     /// <summary>Entity under the cursor (sprites by quad, others by screen radius).</summary>
@@ -406,6 +460,8 @@ public class SoftwareViewport : Control
 
         DrawSceneObjects(ctx, view, proj, w, h);
         DrawSelection(ctx, view, proj, w, h);
+        DrawTransformGizmos(ctx, view, proj, w, h);
+        DrawOrientationTriad(ctx, view, w, h);
 
         string label = Mode switch
         {
@@ -810,9 +866,98 @@ public class SoftwareViewport : Control
         DrawLine(ctx, pen, pts[2], lens);
     }
 
+    private void DrawTransformGizmos(DrawingContext ctx, Matrix4x4 view, Matrix4x4 proj, int w, int h)
+    {
+        if (!ShowGizmos || SelectedEntity is not { } ent || ent.Transform == null || !ent.IsActive || Mode == ViewportMode.Game) return;
+
+        var pos = ent.Transform.Position;
+        var center = Project(pos, view, proj, w, h);
+        if (center.X < -9000) return;
+
+        float len = 1.2f;
+        var xEnd = Project(pos + new Vector3(len, 0, 0), view, proj, w, h);
+        var yEnd = Project(pos + new Vector3(0, len, 0), view, proj, w, h);
+        var zEnd = Project(pos + new Vector3(0, 0, len), view, proj, w, h);
+
+        var xPen = new Pen(new SolidColorBrush(Color.FromRgb(240, 70, 70)), 2.5);
+        var yPen = new Pen(new SolidColorBrush(Color.FromRgb(70, 220, 70)), 2.5);
+        var zPen = new Pen(new SolidColorBrush(Color.FromRgb(70, 120, 240)), 2.5);
+
+        if (ActiveTool == "Rotate")
+        {
+            float r = PickRadius(ent, view, proj, w, h) + 12f;
+            ctx.DrawEllipse(null, xPen, new Point(center.X, center.Y), r, r);
+            ctx.DrawEllipse(null, yPen, new Point(center.X, center.Y), r * 0.7f, r * 0.7f);
+            ctx.DrawEllipse(null, zPen, new Point(center.X, center.Y), r * 0.4f, r * 0.4f);
+            return;
+        }
+
+        if (ActiveTool == "Scale")
+        {
+            if (xEnd.X > -9000) { ctx.DrawLine(xPen, new Point(center.X, center.Y), new Point(xEnd.X, xEnd.Y)); ctx.DrawRectangle(new SolidColorBrush(Color.FromRgb(240, 70, 70)), null, new Rect(xEnd.X - 3, xEnd.Y - 3, 6, 6)); }
+            if (yEnd.X > -9000) { ctx.DrawLine(yPen, new Point(center.X, center.Y), new Point(yEnd.X, yEnd.Y)); ctx.DrawRectangle(new SolidColorBrush(Color.FromRgb(70, 220, 70)), null, new Rect(yEnd.X - 3, yEnd.Y - 3, 6, 6)); }
+            if (zEnd.X > -9000) { ctx.DrawLine(zPen, new Point(center.X, center.Y), new Point(zEnd.X, zEnd.Y)); ctx.DrawRectangle(new SolidColorBrush(Color.FromRgb(70, 120, 240)), null, new Rect(zEnd.X - 3, zEnd.Y - 3, 6, 6)); }
+            return;
+        }
+
+        if (xEnd.X > -9000) DrawArrow(ctx, xPen, new Point(center.X, center.Y), new Point(xEnd.X, xEnd.Y));
+        if (yEnd.X > -9000) DrawArrow(ctx, yPen, new Point(center.X, center.Y), new Point(yEnd.X, yEnd.Y));
+        if (zEnd.X > -9000) DrawArrow(ctx, zPen, new Point(center.X, center.Y), new Point(zEnd.X, zEnd.Y));
+    }
+
+    private static void DrawArrow(DrawingContext ctx, Pen pen, Point start, Point end)
+    {
+        ctx.DrawLine(pen, start, end);
+        var dir = end - start;
+        double len = Math.Sqrt(dir.X * dir.X + dir.Y * dir.Y);
+        if (len > 0.001)
+        {
+            dir = new Point(dir.X / len, dir.Y / len);
+            var perp = new Point(-dir.Y, dir.X);
+            var p1 = end - dir * 6 + perp * 3;
+            var p2 = end - dir * 6 - perp * 3;
+            ctx.DrawLine(pen, end, p1);
+            ctx.DrawLine(pen, end, p2);
+        }
+    }
+
     private static void DrawLine(DrawingContext ctx, Pen pen, Vector2 a, Vector2 b)
     {
         if (a.X < -9000 || b.X < -9000) return;
         ctx.DrawLine(pen, new Point(a.X, a.Y), new Point(b.X, b.Y));
+    }
+
+    private void DrawOrientationTriad(DrawingContext ctx, Matrix4x4 view, int w, int h)
+    {
+        if (Mode == ViewportMode.Game) return;
+
+        float centerPx = w - 45f;
+        float centerPy = 45f;
+        float scale = 22f;
+
+        Vector3 ProjectAxis(Vector3 worldAxis)
+        {
+            var v = Vector3.TransformNormal(worldAxis, view);
+            return new Vector3(v.X, -v.Y, v.Z);
+        }
+
+        var axes = new (Vector3 dir, Color color, string label)[]
+        {
+            (ProjectAxis(Vector3.UnitX), Color.FromRgb(235, 75, 75), "X"),
+            (ProjectAxis(Vector3.UnitY), Color.FromRgb(75, 210, 75), "Y"),
+            (ProjectAxis(Vector3.UnitZ), Color.FromRgb(75, 135, 245), "Z")
+        };
+
+        Array.Sort(axes, (a, b) => a.dir.Z.CompareTo(b.dir.Z));
+
+        ctx.DrawEllipse(new SolidColorBrush(Color.Parse("#3010172a")), null, new Point(centerPx, centerPy), 28, 28);
+
+        foreach (var (dir, color, label) in axes)
+        {
+            var endPoint = new Point(centerPx + dir.X * scale, centerPy + dir.Y * scale);
+            var pen = new Pen(new SolidColorBrush(color), 2);
+            ctx.DrawLine(pen, new Point(centerPx, centerPy), endPoint);
+            ctx.DrawEllipse(new SolidColorBrush(color), null, endPoint, 3, 3);
+        }
     }
 }

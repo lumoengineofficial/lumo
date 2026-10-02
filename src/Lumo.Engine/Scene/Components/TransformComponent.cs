@@ -103,6 +103,25 @@ public sealed class TransformComponent
         );
         Rotation = Quaternion.CreateFromRotationMatrix(lookMatrix);
     }
+
+    public void ResetPosition() => Position = Vector3.Zero;
+    public void ResetRotation() => Rotation = Quaternion.Identity;
+    public void ResetScale() => Scale = Vector3.One;
+
+    public void ResetAll()
+    {
+        ResetPosition();
+        ResetRotation();
+        ResetScale();
+    }
+
+    public void CopyFrom(TransformComponent source)
+    {
+        if (source == null) return;
+        Position = source.Position;
+        Rotation = source.Rotation;
+        Scale = source.Scale;
+    }
 }
 
 /// <summary>
