@@ -403,6 +403,24 @@ void main() {
         }
     }
 
+    public void FocusOnEntity(Lumo.Engine.Scene.Entity? entity)
+    {
+        if (entity?.Transform != null)
+        {
+            _cameraTarget = entity.Transform.Position;
+            float bounds = Math.Max(0.5f, MathF.Max(entity.Transform.Scale.X, MathF.Max(entity.Transform.Scale.Y, entity.Transform.Scale.Z)));
+            _cameraDistance = Math.Max(2f, bounds * 3.5f);
+        }
+    }
+
+    public void ResetCamera()
+    {
+        _cameraTarget = Vector3.Zero;
+        _cameraDistance = 5f;
+        _cameraYaw = 45f;
+        _cameraPitch = 30f;
+    }
+
     private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         var pos = e.GetPosition(this);
@@ -410,6 +428,7 @@ void main() {
         Focus();
         if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) _orbiting = true;
         else if (e.GetCurrentPoint(this).Properties.IsMiddleButtonPressed || e.GetCurrentPoint(this).Properties.IsRightButtonPressed) _panning = true;
+        e.Pointer.Capture(this);
         e.Handled = true;
     }
 
@@ -417,6 +436,7 @@ void main() {
     {
         _orbiting = false;
         _panning = false;
+        if (e.Pointer.Captured == this) e.Pointer.Capture(null);
         e.Handled = true;
     }
 
@@ -435,10 +455,17 @@ void main() {
         }
         else if (_panning)
         {
-            float panSpeed = _cameraDistance * 0.002f;
+            float panSpeed = _cameraDistance * 0.0015f;
             float yawRad = MathHelper.DegreesToRadians(_cameraYaw);
-            Vector3 right = Vector3.Normalize(Vector3.Cross(Vector3.UnitY, new Vector3(MathF.Sin(yawRad), 0, MathF.Cos(yawRad))));
-            _cameraTarget += right * dx * panSpeed - Vector3.UnitY * dy * panSpeed;
+            float pitchRad = MathHelper.DegreesToRadians(_cameraPitch);
+            Vector3 camPos = _cameraTarget + new Vector3(
+                _cameraDistance * MathF.Cos(pitchRad) * MathF.Sin(yawRad),
+                _cameraDistance * MathF.Sin(pitchRad),
+                _cameraDistance * MathF.Cos(pitchRad) * MathF.Cos(yawRad));
+            Vector3 fwd = Vector3.Normalize(_cameraTarget - camPos);
+            Vector3 right = Vector3.Normalize(Vector3.Cross(fwd, Vector3.UnitY));
+            Vector3 up = Vector3.Normalize(Vector3.Cross(right, fwd));
+            _cameraTarget -= right * dx * panSpeed - up * dy * panSpeed;
         }
     }
 
