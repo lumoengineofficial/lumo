@@ -649,8 +649,23 @@ public class SoftwareViewport : Control
         // Dense meshes render solid; stroking every triangle is too expensive.
         Pen? fillEdge = idx.Length > 10_000 ? null : edge;
 
+        var vcols = mesh.VertexColors;
+        bool hasVc = vcols.Length == world.Length * 4;
+
         foreach (var (_, ai, bi, ci, x0, y0, x1, y1, x2, y2) in tris)
         {
+            Vector3 fill = baseColor;
+            if (hasVc)
+            {
+                int c0 = ai * 4, c1 = bi * 4, c2 = ci * 4;
+                float alpha = (vcols[c0 + 3] + vcols[c1 + 3] + vcols[c2 + 3]) / 3f;
+                if (alpha < 0.5f) continue;
+                fill = new Vector3(
+                    (vcols[c0] + vcols[c1] + vcols[c2]) / 3f * baseColor.X,
+                    (vcols[c0 + 1] + vcols[c1 + 1] + vcols[c2 + 1]) / 3f * baseColor.Y,
+                    (vcols[c0 + 2] + vcols[c1 + 2] + vcols[c2 + 2]) / 3f * baseColor.Z);
+            }
+
             var geo = new StreamGeometry();
             using (var gc = geo.Open())
             {
@@ -663,7 +678,7 @@ public class SoftwareViewport : Control
             Vector3 normal = Vector3.Normalize(Vector3.Cross(world[bi] - world[ai], world[ci] - world[ai]));
             Vector3 centroid = (world[ai] + world[bi] + world[ci]) / 3f;
             float brightness = shading ? FxLighting.Brightness(normal, camPos - centroid) : 1f;
-            ctx.DrawGeometry(new SolidColorBrush(ShadeColor(baseColor, brightness)), fillEdge, geo);
+            ctx.DrawGeometry(new SolidColorBrush(ShadeColor(fill, brightness)), fillEdge, geo);
         }
     }
 

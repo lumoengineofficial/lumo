@@ -42,11 +42,36 @@ public sealed class Texture2D
             if (Cache.TryGetValue(path, out var hit)) return hit;
         }
 
+        Texture2D? tex;
+        try
+        {
+            tex = Decode(File.ReadAllBytes(path));
+        }
+        catch
+        {
+            return null;
+        }
+
+        if (tex != null)
+        {
+            lock (CacheLock)
+            {
+                Cache[path] = tex;
+            }
+        }
+        return tex;
+    }
+
+    /// <summary>Decodes an encoded image (PNG/JPG/WebP bytes) without caching.</summary>
+    public static Texture2D? Decode(byte[] data)
+    {
+        if (data == null || data.Length == 0) return null;
+
         SKBitmap? decoded = null;
         SKBitmap? rgba = null;
         try
         {
-            decoded = SKBitmap.Decode(path);
+            decoded = SKBitmap.Decode(data);
             if (decoded == null) return null;
 
             rgba = decoded.Copy(SKColorType.Rgba8888);
@@ -59,12 +84,7 @@ public sealed class Texture2D
             if (rgba.AlphaType == SKAlphaType.Premul)
                 Unpremultiply(pixels);
 
-            var tex = new Texture2D(w, h, pixels);
-            lock (CacheLock)
-            {
-                Cache[path] = tex;
-            }
-            return tex;
+            return new Texture2D(w, h, pixels);
         }
         catch
         {

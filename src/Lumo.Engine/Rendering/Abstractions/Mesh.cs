@@ -9,6 +9,8 @@ public sealed class Mesh : IDisposable
     public uint[] Indices { get; set; } = [];
     public float[] Normals { get; set; } = [];
     public float[] TexCoords { get; set; } = [];
+    public float[] VertexColors { get; set; } = [];
+    public bool HasTexture { get; set; }
     public string Name { get; set; } = string.Empty;
     private bool _isDisposed;
 
