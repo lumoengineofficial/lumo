@@ -49,9 +49,12 @@ public class Camera
 
     public void Orbit(float yawDelta, float pitchDelta)
     {
-        Vector3 direction = Vector3.Normalize(Target - Position);
+        Vector3 direction = Vector3.Normalize(Position - Target);
+        if (direction.LengthSquared() < 0.0001f)
+            direction = new Vector3(0, 0, 1);
+
         float yaw = MathF.Atan2(direction.X, direction.Z) + yawDelta;
-        float pitch = MathF.Asin(direction.Y) + pitchDelta;
+        float pitch = MathF.Asin(Math.Clamp(direction.Y, -0.999f, 0.999f)) + pitchDelta;
         pitch = Math.Clamp(pitch, -MathF.PI / 2.0f + 0.01f, MathF.PI / 2.0f - 0.01f);
 
         float distance = Vector3.Distance(Position, Target);
@@ -60,6 +63,26 @@ public class Camera
             MathF.Sin(pitch) * distance,
             MathF.Cos(yaw) * MathF.Cos(pitch) * distance
         );
+    }
+
+    public void Focus(Vector3 targetPosition, float focusDistance = 5.0f)
+    {
+        Vector3 direction = Position - Target;
+        if (direction.LengthSquared() < 0.0001f)
+            direction = new Vector3(0, 0, 1);
+        else
+            direction = Vector3.Normalize(direction);
+
+        Target = targetPosition;
+        Position = Target + direction * Math.Max(0.5f, focusDistance);
+    }
+
+    public void Reset()
+    {
+        Target = Vector3.Zero;
+        Position = new Vector3(0, 0, 3);
+        Up = Vector3.UnitY;
+        FieldOfView = 60.0f;
     }
 
     public void Pan(float rightDelta, float upDelta)
