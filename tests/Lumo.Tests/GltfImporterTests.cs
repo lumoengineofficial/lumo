@@ -1,4 +1,5 @@
 using Lumo.Engine.Assets;
+using SkiaSharp;
 
 namespace Lumo.Tests;
 
@@ -160,6 +161,107 @@ public class GltfImporterTests
             Path.Combine(Path.GetTempPath(), "LumoGltfNoDir_" + Guid.NewGuid().ToString("N"))));
     }
 
+    [Fact]
+    public void Load_UntexturedMesh_HasNoVertexColors()
+    {
+        string dir = TempDir();
+        try
+        {
+            string file = WriteTriangleGltf(dir);
+
+            var mesh = GltfImporter.Load(file);
+
+            Assert.False(mesh.HasTexture);
+            Assert.Empty(mesh.VertexColors);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Load_TexturedPrimitive_BakesVertexColorsFromBaseColorTexture()
+    {
+        string dir = TempDir();
+        try
+        {
+            using var bmp = new SKBitmap(1, 1);
+            bmp.SetPixel(0, 0, new SKColor(200, 40, 90));
+            using var img = SKImage.FromBitmap(bmp);
+            File.WriteAllBytes(Path.Combine(dir, "diff.png"), img.Encode(SKEncodedImageFormat.Png, 100).ToArray());
+
+            string file = WriteTexturedTriangleGltf(dir);
+
+            var mesh = GltfImporter.Load(file);
+
+            Assert.True(mesh.HasTexture);
+            Assert.Equal(12, mesh.VertexColors.Length);
+            for (int i = 0; i < 3; i++)
+            {
+                Assert.Equal(200f / 255f, mesh.VertexColors[i * 4], 2);
+                Assert.Equal(40f / 255f, mesh.VertexColors[i * 4 + 1], 2);
+                Assert.Equal(90f / 255f, mesh.VertexColors[i * 4 + 2], 2);
+                Assert.Equal(1f, mesh.VertexColors[i * 4 + 3], 2);
+            }
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    /// <summary>Writes a textured triangle glTF: positions, normals, UVs and indices
+    /// in one .bin, plus a material referencing a 1×1 base color PNG.</summary>
+    private static string WriteTexturedTriangleGltf(string dir, string name = "tritex")
+    {
+        var payload = new byte[102];
+
+        WriteF(payload, 0, 0f); WriteF(payload, 4, 0f); WriteF(payload, 8, 0f);
+        WriteF(payload, 12, 1f); WriteF(payload, 16, 0f); WriteF(payload, 20, 0f);
+        WriteF(payload, 24, 0f); WriteF(payload, 28, 1f); WriteF(payload, 32, 0f);
+
+        for (int i = 0; i < 3; i++)
+            WriteF(payload, 44 + i * 12, 1f);
+
+        WriteF(payload, 80, 1f);
+        WriteF(payload, 92, 1f);
+
+        WriteU(payload, 98, 1);
+        WriteU(payload, 100, 2);
+
+        File.WriteAllBytes(Path.Combine(dir, name + ".bin"), payload);
+
+        string json = $$"""
+            {
+              "asset": { "version": "2.0" },
+              "scenes": [ { "nodes": [ 0 ] } ],
+              "nodes": [ { "mesh": 0 } ],
+              "meshes": [ {
+                "primitives": [ {
+                  "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 },
+                  "indices": 3,
+                  "material": 0
+                } ]
+              } ],
+              "materials": [ { "pbrMetallicRoughness": { "baseColorTexture": { "index": 0 } } } ],
+              "textures": [ { "source": 0 } ],
+              "images": [ { "uri": "diff.png" } ],
+              "accessors": [
+                { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                  "min": [ 0, 0, 0 ], "max": [ 1, 1, 0 ] },
+                { "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3" },
+                { "bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2" },
+                { "bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR" }
+              ],
+              "bufferViews": [
+                { "buffer": 0, "byteOffset": 0,  "byteLength": 36 },
+                { "buffer": 0, "byteOffset": 36, "byteLength": 36 },
+                { "buffer": 0, "byteOffset": 72, "byteLength": 24 },
+                { "buffer": 0, "byteOffset": 96, "byteLength": 6 }
+              ],
+              "buffers": [ { "uri": "{{name}}.bin", "byteLength": 102 } ]
+            }
+            """;
+        string file = Path.Combine(dir, name + ".gltf");
+        File.WriteAllText(file, json);
+        return file;
+    }
+
     /// <summary>Writes a .gltf whose POSITION buffer is a grid of quads (2 tris each).</summary>
     private static string WriteDenseGridGltf(string dir, int grid)
     {
@@ -219,9 +321,15 @@ public class GltfImporterTests
         p += 4;
     }
 
+    private static void WriteF(byte[] buf, int offset, float v)
+        => Buffer.BlockCopy(BitConverter.GetBytes(v), 0, buf, offset, 4);
+
     private static void WriteU(byte[] buf, ref int p, ushort v)
     {
         Buffer.BlockCopy(BitConverter.GetBytes(v), 0, buf, p, 2);
         p += 2;
     }
+
+    private static void WriteU(byte[] buf, int offset, ushort v)
+        => Buffer.BlockCopy(BitConverter.GetBytes(v), 0, buf, offset, 2);
 }

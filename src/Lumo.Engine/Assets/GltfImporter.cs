@@ -36,6 +36,7 @@ public static class GltfImporter
         JsonElement[] accessors = root.TryGetProperty("accessors", out var aEl) ? aEl.EnumerateArray().ToArray() : [];
         JsonElement[] meshes = root.TryGetProperty("meshes", out var mEl) ? mEl.EnumerateArray().ToArray() : [];
         JsonElement[] nodes = root.TryGetProperty("nodes", out var nEl) ? nEl.EnumerateArray().ToArray() : [];
+        BaseColorTex?[] materials = ReadMaterials(root, baseDir, buffers, views);
 
         var acc = new MeshAccumulator(Path.GetFileNameWithoutExtension(path));
         var visited = new HashSet<int>();
@@ -44,12 +45,12 @@ public static class GltfImporter
             foreach (var scene in scenesEl.EnumerateArray())
                 if (scene.TryGetProperty("nodes", out var rootsEl))
                     foreach (var r in rootsEl.EnumerateArray())
-                        WalkNode(r.GetInt32(), Matrix4x4.Identity, nodes, meshes, buffers, views, accessors, acc, visited);
+                        WalkNode(r.GetInt32(), Matrix4x4.Identity, nodes, meshes, buffers, views, accessors, acc, visited, materials);
 
         // Nodes outside any scene still get imported with identity transform.
         for (int i = 0; i < nodes.Length; i++)
             if (!visited.Contains(i))
-                WalkNode(i, Matrix4x4.Identity, nodes, meshes, buffers, views, accessors, acc, visited);
+                WalkNode(i, Matrix4x4.Identity, nodes, meshes, buffers, views, accessors, acc, visited, materials);
 
         if (acc.Positions.Count == 0 || acc.Indices.Count == 0)
             throw new InvalidDataException($"glTF contains no geometry: {path}");
@@ -112,10 +113,142 @@ public static class GltfImporter
         return count;
     }
 
+    // ---------- base-color materials ----------
+
+    private sealed class BaseColorTex
+    {
+        public Texture2D? Texture;
+        public int TexCoord;
+        public Vector2 Offset;
+        public Vector2 Scale = Vector2.One;
+        public float Rotation;
+        public bool ClampU;
+        public bool ClampV;
+    }
+
+    private static BaseColorTex?[] ReadMaterials(JsonElement root, string baseDir, byte[][] buffers, JsonElement[] views)
+    {
+        if (!root.TryGetProperty("materials", out var matsEl)) return [];
+
+        JsonElement[] textures = root.TryGetProperty("textures", out var tEl) ? tEl.EnumerateArray().ToArray() : [];
+        JsonElement[] images = root.TryGetProperty("images", out var iEl) ? iEl.EnumerateArray().ToArray() : [];
+        JsonElement[] samplers = root.TryGetProperty("samplers", out var sEl) ? sEl.EnumerateArray().ToArray() : [];
+
+        var result = new BaseColorTex?[matsEl.GetArrayLength()];
+        int mi = 0;
+        foreach (var mat in matsEl.EnumerateArray())
+        {
+            if (mat.TryGetProperty("pbrMetallicRoughness", out var pbr) &&
+                pbr.TryGetProperty("baseColorTexture", out var bct) &&
+                bct.TryGetProperty("index", out var texIdxEl))
+            {
+                int texIdx = texIdxEl.GetInt32();
+                var info = new BaseColorTex
+                {
+                    TexCoord = bct.TryGetProperty("texCoord", out var tc) ? tc.GetInt32() : 0,
+                };
+
+                if (bct.TryGetProperty("extensions", out var ext) &&
+                    ext.TryGetProperty("KHR_texture_transform", out var tr))
+                {
+                    if (tr.TryGetProperty("offset", out var off))
+                    {
+                        var o = ReadFloatArray(off, 2);
+                        info.Offset = new Vector2(o[0], o[1]);
+                    }
+                    if (tr.TryGetProperty("scale", out var sc))
+                    {
+                        var s2 = ReadFloatArray(sc, 2);
+                        info.Scale = new Vector2(s2[0], s2[1]);
+                    }
+                    if (tr.TryGetProperty("rotation", out var rot))
+                        info.Rotation = rot.GetSingle();
+                }
+
+                if ((uint)texIdx < (uint)textures.Length)
+                {
+                    var tex = textures[texIdx];
+                    if (tex.TryGetProperty("source", out var src) && src.GetInt32() < images.Length)
+                        info.Texture = LoadImage(images[src.GetInt32()], baseDir, buffers, views);
+                    if (tex.TryGetProperty("sampler", out var smp) && smp.GetInt32() < samplers.Length)
+                    {
+                        var sampler = samplers[smp.GetInt32()];
+                        info.ClampU = sampler.TryGetProperty("wrapS", out var wu) && wu.GetInt32() == 33071;
+                        info.ClampV = sampler.TryGetProperty("wrapT", out var wv) && wv.GetInt32() == 33071;
+                    }
+                }
+
+                if (info.Texture != null) result[mi] = info;
+            }
+            mi++;
+        }
+        return result;
+    }
+
+    private static Texture2D? LoadImage(JsonElement image, string baseDir, byte[][] buffers, JsonElement[] views)
+    {
+        try
+        {
+            if (image.TryGetProperty("uri", out var u))
+            {
+                string uri = u.GetString() ?? "";
+                if (uri.StartsWith("data:", StringComparison.Ordinal))
+                {
+                    int comma = uri.IndexOf(',');
+                    if (comma < 0) return null;
+                    string head = uri[..comma];
+                    string data = uri[(comma + 1)..];
+                    return Texture2D.Decode(head.Contains("base64", StringComparison.OrdinalIgnoreCase)
+                        ? Convert.FromBase64String(data)
+                        : Encoding.UTF8.GetBytes(Uri.UnescapeDataString(data)));
+                }
+                return Texture2D.Load(Path.GetFullPath(Path.Combine(baseDir, Uri.UnescapeDataString(uri))));
+            }
+
+            if (image.TryGetProperty("bufferView", out var bv) &&
+                (uint)bv.GetInt32() < (uint)views.Length)
+            {
+                var view = views[bv.GetInt32()];
+                int bufIdx = view.GetProperty("buffer").GetInt32();
+                int off = view.TryGetProperty("byteOffset", out var o) ? o.GetInt32() : 0;
+                int len = view.GetProperty("byteLength").GetInt32();
+                if ((uint)bufIdx >= (uint)buffers.Length || off < 0 || len <= 0 || off + len > buffers[bufIdx].Length)
+                    return null;
+                var bytes = new byte[len];
+                Buffer.BlockCopy(buffers[bufIdx], off, bytes, 0, len);
+                return Texture2D.Decode(bytes);
+            }
+        }
+        catch
+        {
+            return null;
+        }
+        return null;
+    }
+
+    private static float[] TransformUv(float[] uv, BaseColorTex bc)
+    {
+        if (bc.Offset == Vector2.Zero && bc.Scale == Vector2.One && bc.Rotation == 0f)
+            return uv;
+
+        var result = new float[uv.Length];
+        float cos = MathF.Cos(bc.Rotation);
+        float sin = MathF.Sin(bc.Rotation);
+        for (int i = 0; i + 1 < uv.Length; i += 2)
+        {
+            float x = uv[i] * bc.Scale.X;
+            float y = uv[i + 1] * bc.Scale.Y;
+            result[i] = bc.Offset.X + x * cos - y * sin;
+            result[i + 1] = bc.Offset.Y + x * sin + y * cos;
+        }
+        return result;
+    }
+
     // ---------- scene graph ----------
 
     private static void WalkNode(int index, Matrix4x4 parent, JsonElement[] nodes, JsonElement[] meshes,
-        byte[][] buffers, JsonElement[] views, JsonElement[] accessors, MeshAccumulator acc, HashSet<int> visited)
+        byte[][] buffers, JsonElement[] views, JsonElement[] accessors, MeshAccumulator acc, HashSet<int> visited,
+        BaseColorTex?[] materials)
     {
         if ((uint)index >= (uint)nodes.Length || !visited.Add(index)) return;
 
@@ -123,11 +256,11 @@ public static class GltfImporter
         Matrix4x4 world = ReadLocalMatrix(node) * parent;
 
         if (node.TryGetProperty("mesh", out var meshEl) && meshEl.GetInt32() < meshes.Length)
-            AppendMesh(meshes[meshEl.GetInt32()], world, buffers, views, accessors, acc);
+            AppendMesh(meshes[meshEl.GetInt32()], world, buffers, views, accessors, acc, materials);
 
         if (node.TryGetProperty("children", out var children))
             foreach (var c in children.EnumerateArray())
-                WalkNode(c.GetInt32(), world, nodes, meshes, buffers, views, accessors, acc, visited);
+                WalkNode(c.GetInt32(), world, nodes, meshes, buffers, views, accessors, acc, visited, materials);
     }
 
     private static Matrix4x4 ReadLocalMatrix(JsonElement node)
@@ -174,7 +307,7 @@ public static class GltfImporter
     }
 
     private static void AppendMesh(JsonElement mesh, Matrix4x4 world, byte[][] buffers,
-        JsonElement[] views, JsonElement[] accessors, MeshAccumulator acc)
+        JsonElement[] views, JsonElement[] accessors, MeshAccumulator acc, BaseColorTex?[] materials)
     {
         if (!mesh.TryGetProperty("primitives", out var prims)) return;
 
@@ -191,6 +324,19 @@ public static class GltfImporter
             float[]? uv = attrs.TryGetProperty("TEXCOORD_0", out var tAcc)
                 ? ReadNumbers(tAcc.GetInt32(), accessors, views, buffers) : null;
 
+            int matIdx = prim.TryGetProperty("material", out var mEl) ? mEl.GetInt32() : -1;
+            BaseColorTex? bc = (uint)matIdx < (uint)materials.Length ? materials[matIdx] : null;
+            Texture2D? tex = bc?.Texture;
+            float[]? sampleUv = null;
+            if (tex != null)
+            {
+                float[]? src = bc!.TexCoord == 1 && attrs.TryGetProperty("TEXCOORD_1", out var t1Acc)
+                    ? ReadNumbers(t1Acc.GetInt32(), accessors, views, buffers)
+                    : uv;
+                if (src != null && src.Length == pos.Length / 3 * 2)
+                    sampleUv = TransformUv(src, bc);
+            }
+
             uint[] indices;
             if (prim.TryGetProperty("indices", out var iAcc))
             {
@@ -203,7 +349,7 @@ public static class GltfImporter
                 for (int i = 0; i < n; i++) indices[i] = (uint)i;
             }
 
-            acc.AddPrimitive(pos, norm, uv, indices, world);
+            acc.AddPrimitive(pos, norm, uv, indices, world, tex, sampleUv, bc);
         }
     }
 
@@ -419,11 +565,13 @@ public static class GltfImporter
 
         bool hasNormals = src.Normals.Length == verts.Length;
         bool hasUv = src.TexCoords.Length == vertexCount * 2;
+        bool hasColors = src.VertexColors.Length == vertexCount * 4;
 
         var map = new Dictionary<long, int>(Math.Min(vertexCount, 1 << 16));
         var newPos = new List<float>(Math.Min(vertexCount, 1 << 14) * 3);
         var newNorm = hasNormals ? new List<float>(Math.Min(vertexCount, 1 << 14) * 3) : null;
         var newUv = hasUv ? new List<float>(Math.Min(vertexCount, 1 << 14) * 2) : null;
+        var newCol = hasColors ? new List<float>(Math.Min(vertexCount, 1 << 14) * 4) : null;
         var newIdx = new List<uint>(Math.Min(idx.Length, 96_000));
 
         for (int t = 0; t + 2 < idx.Length; t += 3)
@@ -444,6 +592,8 @@ public static class GltfImporter
             Indices = [.. newIdx],
             Normals = newNorm != null ? [.. newNorm] : [],
             TexCoords = newUv != null ? [.. newUv] : [],
+            VertexColors = newCol != null ? [.. newCol] : [],
+            HasTexture = src.HasTexture,
         };
 
         uint Map(uint vi)
@@ -473,6 +623,14 @@ public static class GltfImporter
                 newUv.Add(src.TexCoords[vi * 2]);
                 newUv.Add(src.TexCoords[vi * 2 + 1]);
             }
+            if (newCol != null)
+            {
+                int c4 = (int)vi * 4;
+                newCol.Add(src.VertexColors[c4]);
+                newCol.Add(src.VertexColors[c4 + 1]);
+                newCol.Add(src.VertexColors[c4 + 2]);
+                newCol.Add(src.VertexColors[c4 + 3]);
+            }
             map[key] = id;
             return (uint)id;
         }
@@ -485,11 +643,14 @@ public static class GltfImporter
         public List<float> Positions { get; } = new(4096);
         public List<float> Normals { get; } = new(4096);
         public List<float> TexCoords { get; } = new(4096);
+        public List<float> Colors { get; } = new(4096);
         public List<uint> Indices { get; } = new(4096);
+        public bool HasTexture { get; private set; }
         private bool _normalsComplete = true;
         private bool _uvComplete = true;
 
-        public void AddPrimitive(float[] pos, float[]? norm, float[]? uv, uint[] idx, Matrix4x4 world)
+        public void AddPrimitive(float[] pos, float[]? norm, float[]? uv, uint[] idx, Matrix4x4 world,
+            Texture2D? tex = null, float[]? sampleUv = null, BaseColorTex? bc = null)
         {
             bool identity = world.IsIdentity;
             uint offset = (uint)(Positions.Count / 3);
@@ -529,8 +690,55 @@ public static class GltfImporter
                 else TexCoords.AddRange(uv);
             }
 
+            int vertexCount = pos.Length / 3;
+            for (int i = 0; i < vertexCount; i++)
+            {
+                float r = 1f, g = 1f, b = 1f, a = 1f;
+                if (tex != null && sampleUv != null && i * 2 + 1 < sampleUv.Length)
+                {
+                    var c = SampleTexture(tex, sampleUv[i * 2], sampleUv[i * 2 + 1], bc);
+                    r = c.X; g = c.Y; b = c.Z; a = c.W;
+                }
+                Colors.Add(r);
+                Colors.Add(g);
+                Colors.Add(b);
+                Colors.Add(a);
+            }
+            if (tex != null) HasTexture = true;
+
             for (int i = 0; i < idx.Length; i++)
                 Indices.Add(offset + idx[i]);
+        }
+
+        private static Vector4 SampleTexture(Texture2D t, float u, float v, BaseColorTex? bc)
+        {
+            if (bc is { ClampU: false }) u -= MathF.Floor(u);
+            else u = Math.Clamp(u, 0f, 1f);
+            if (bc is { ClampV: false }) v -= MathF.Floor(v);
+            else v = Math.Clamp(v, 0f, 1f);
+
+            float x = u * (t.Width - 1);
+            float y = v * (t.Height - 1);
+            int x0 = (int)x, y0 = (int)y;
+            int x1 = Math.Min(x0 + 1, t.Width - 1);
+            int y1 = Math.Min(y0 + 1, t.Height - 1);
+            float fx = x - x0, fy = y - y0;
+
+            var px = t.Pixels;
+            int i00 = (y0 * t.Width + x0) * 4, i10 = (y0 * t.Width + x1) * 4;
+            int i01 = (y1 * t.Width + x0) * 4, i11 = (y1 * t.Width + x1) * 4;
+            var result = new Vector4();
+            for (int ch = 0; ch < 4; ch++)
+            {
+                float top = px[i00 + ch] + (px[i10 + ch] - px[i00 + ch]) * fx;
+                float bot = px[i01 + ch] + (px[i11 + ch] - px[i01 + ch]) * fx;
+                float val = (top + (bot - top) * fy) / 255f;
+                if (ch == 0) result.X = val;
+                else if (ch == 1) result.Y = val;
+                else if (ch == 2) result.Z = val;
+                else result.W = val;
+            }
+            return result;
         }
 
         public Mesh ToMesh()
@@ -544,6 +752,9 @@ public static class GltfImporter
                 mesh.Normals = [.. Normals];
             if (_uvComplete && TexCoords.Count == Positions.Count / 3 * 2)
                 mesh.TexCoords = [.. TexCoords];
+            if (HasTexture && Colors.Count == Positions.Count / 3 * 4)
+                mesh.VertexColors = [.. Colors];
+            mesh.HasTexture = HasTexture;
             return mesh;
         }
     }

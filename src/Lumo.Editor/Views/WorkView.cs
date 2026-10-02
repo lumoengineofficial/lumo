@@ -2364,6 +2364,8 @@ public class WorkView : UserControl
             PushSceneUndo();
             var entity = _scene.CreateEntity(mesh.Name);
             entity.MeshRenderer = new MeshRendererComponent { MeshName = mesh.Name };
+            if (mesh.HasTexture)
+                entity.MeshRenderer.Color = System.Numerics.Vector3.One;
 
             _selectedEntity = entity;
             RefreshHierarchy();

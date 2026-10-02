@@ -673,12 +673,26 @@ public sealed class GameView : Control
         tris.Sort((x, y) => y.depth.CompareTo(x.depth));
 
         var edge = new Pen(new SolidColorBrush(Color.FromRgb(150, 168, 200)), 0.8);
+        var vcols = mesh.VertexColors;
+        bool hasVc = vcols.Length == world.Length * 4;
         foreach (var (_, ai, bi, ci) in tris)
         {
             var p0 = Project(world[ai], view, proj, w, h);
             var p1 = Project(world[bi], view, proj, w, h);
             var p2 = Project(world[ci], view, proj, w, h);
             if (p0.X < -9000 || p1.X < -9000 || p2.X < -9000) continue;
+
+            Vector3 fill = baseColor;
+            if (hasVc)
+            {
+                int c0 = ai * 4, c1 = bi * 4, c2 = ci * 4;
+                float alpha = (vcols[c0 + 3] + vcols[c1 + 3] + vcols[c2 + 3]) / 3f;
+                if (alpha < 0.5f) continue;
+                fill = new Vector3(
+                    (vcols[c0] + vcols[c1] + vcols[c2]) / 3f * baseColor.X,
+                    (vcols[c0 + 1] + vcols[c1 + 1] + vcols[c2 + 1]) / 3f * baseColor.Y,
+                    (vcols[c0 + 2] + vcols[c1 + 2] + vcols[c2 + 2]) / 3f * baseColor.Z);
+            }
 
             var geo = new StreamGeometry();
             using (var gc = geo.Open())
@@ -692,7 +706,7 @@ public sealed class GameView : Control
             Vector3 normal = Vector3.Normalize(Vector3.Cross(world[bi] - world[ai], world[ci] - world[ai]));
             Vector3 centroid = (world[ai] + world[bi] + world[ci]) / 3f;
             float brightness = shading ? FxLighting.Brightness(normal, camPos - centroid) : 1f;
-            ctx.DrawGeometry(new SolidColorBrush(ShadeColor(baseColor, brightness)), edge, geo);
+            ctx.DrawGeometry(new SolidColorBrush(ShadeColor(fill, brightness)), edge, geo);
         }
     }
 }
