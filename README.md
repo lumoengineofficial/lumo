@@ -1,49 +1,69 @@
-# Lumo Engine
+<p align="center">
+  <img src="lumologo.png" width="140" alt="Lumo Engine logo"/>
+</p>
 
-A C#/.NET game engine with real-time 3D rendering, Avalonia UI editor, scene management, physics, and game packaging.
+<h1 align="center">Lumo Engine</h1>
 
-## Features
+<p align="center">
+  A C#/.NET game engine with a full Avalonia editor, visual scripting, asset import and a standalone game runtime.
+</p>
 
-- **Real-time 3D rendering** — OpenGL 3.3 via Silk.NET
-- **Editor UI** — Avalonia with Home (project browser) and Work (full editor) screens
-- **Scene management** — Entities, transforms, mesh renderers, lights, cameras
-- **Project system** — Create, open, save projects as JSON
-- **OBJ export** — Export scenes to `.obj` files
-- **Tests** — xUnit test suite
+<p align="center">
+  <a href="https://github.com/lumoengineofficial/lumo/actions/workflows/dotnet.yml"><img src="https://github.com/lumoengineofficial/lumo/actions/workflows/dotnet.yml/badge.svg" alt="Build"/></a>
+  <img src="https://img.shields.io/badge/tests-127%20passed-brightgreen" alt="Tests"/>
+  <a href="https://github.com/lumoengineofficial/lumo/releases"><img src="https://img.shields.io/github/v/release/lumoengineofficial/lumo" alt="Release"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"/></a>
+</p>
 
-## Projects
+## Highlights
 
-| Project | Description |
-|---------|-------------|
-| `Lumo.Engine` | Core engine (scene, rendering, physics, audio) |
-| `Lumo.Editor` | Avalonia-based editor application |
-| `Lumo.Runtime` | Game runtime player |
-| `Lumo.Tools` | Asset/logo processing tools |
-| `Lumo.Examples` | Example scenes |
-| `Lumo.Tests` | Unit tests |
+- **Scene editor** — scene tree, entity inspector, play mode, undo/redo (Ctrl+Z), history panel
+- **Transform tools** — Move / Rotate / Scale gizmos with grid snapping, camera focus (`F`), Copy / Paste / Reset per actor
+- **Rendering** — OpenGL 3.3 (Silk.NET) with an automatic software-renderer fallback
+- **Asset import** — OBJ and glTF 2.0 models (huge models are auto-decimated so the editor stays smooth), textures and sprites
+- **Visual scripting** — node-graph system with a palette, wires and typed properties
+- **Scripting** — attach C# scripts to actors directly from the editor
+- **Project system** — create / open / save projects, FileSystem asset browser, one-click build & run
+- **Runtime** — standalone game player (`Lumo.Runtime`) plus plugins support
+- **Quality** — 127 xUnit tests, GitHub Actions CI on every push
 
-## Requirements
+## Download
 
-- .NET 11 SDK
-- OpenGL 3.3 capable GPU
+Grab the latest **Windows zip** from the [Releases](https://github.com/lumoengineofficial/lumo/releases) page, extract it and run `Lumo.Editor.exe` — no .NET installation required.
 
-## Build
+## Build from source
+
+Requirements: [.NET SDK](https://dotnet.microsoft.com/download) 10 or 11, Windows (for the editor UI).
 
 ```bash
+git clone https://github.com/lumoengineofficial/lumo.git
+cd lumo
 dotnet build LumoEngine.sln
 ```
 
-## Test
+Run the tests:
 
 ```bash
 dotnet test tests/Lumo.Tests
 ```
 
-## Run Editor
+Run the editor:
 
 ```bash
 dotnet run --project src/Lumo.Editor
 ```
+
+## Projects
+
+| Project | Description |
+|---------|-------------|
+| `Lumo.Engine` | Core engine — scene, rendering, physics, audio, scripting |
+| `Lumo.Editor` | Avalonia-based editor application |
+| `Lumo.Runtime` | Game runtime player |
+| `Lumo.Tools` | Asset / logo processing tools |
+| `Lumo.Examples` | Example scenes |
+| `Lumo.Plugins` | Plugin API |
+| `Lumo.Tests` | Unit tests |
 
 ## License
 
