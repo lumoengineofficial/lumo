@@ -7,6 +7,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Lumo.Editor.Editing;
+using Lumo.Editor.Export;
 using Lumo.Editor.Rendering;
 using Lumo.Editor.Ui;
 using Lumo.Editor.VisualScripting;
@@ -87,7 +88,6 @@ public class WorkView : UserControl
     private GraphsPanel? _graphsPanel;
     private MenuFlyout? _projectFlyout;
     private MenuFlyout? _editFlyout;
-    private bool _exporting;
     private readonly HistoryStack _sceneHistory = new();
     private static (System.Numerics.Vector3 pos, System.Numerics.Quaternion rot, System.Numerics.Vector3 scale)? _copiedTransform;
     private bool _snapEnabled = true;
@@ -405,7 +405,7 @@ public class WorkView : UserControl
                 _fpsText,
                 _playButton,
                 stopButton,
-                UiTheme.IconBtn(Icons.Rocket, ExportStandalone, 15),
+                UiTheme.IconBtn(Icons.Rocket, OpenExportDialog, 15),
                 UiTheme.IconBtn(Icons.Gear, OpenSettings, 15),
             }
         };
@@ -1837,8 +1837,8 @@ public class WorkView : UserControl
         saveItem.Click += (_, _) => SaveProject();
         var buildItem = new MenuItem { Header = "Build Scripts" };
         buildItem.Click += (_, _) => BuildProject();
-        var exportItem = new MenuItem { Header = "Export Standalone (win-x64)..." };
-        exportItem.Click += (_, _) => ExportStandalone();
+        var exportItem = new MenuItem { Header = "Export Game..." };
+        exportItem.Click += (_, _) => OpenExportDialog();
         return new MenuFlyout { ItemsSource = new object[] { saveItem, buildItem, new Separator(), exportItem } };
     }
 
@@ -1941,145 +1941,14 @@ public class WorkView : UserControl
         catch (Exception ex) { Log($"Undo/redo failed: {ex.Message}"); }
     }
 
-    private async void ExportStandalone()
+    private void OpenExportDialog()
     {
-        if (_exporting) { Log("Export already running."); return; }
-
-        string? runtimeProj = FindRuntimeProject();
-        if (runtimeProj == null)
-        {
-            Log("Export failed: Lumo.Runtime project not found (dev layout required).");
-            return;
-        }
-        string? dotnet = FindDotnet();
-        if (dotnet == null)
-        {
-            Log("Export failed: dotnet SDK not found.");
-            return;
-        }
-
-        _exporting = true;
-        try
-        {
-            SaveProject();
-            _graphsPanel?.SaveCurrentGraph();
-
-            string safe = new string(_project.Name.Where(char.IsLetterOrDigit).ToArray());
-            if (safe.Length == 0) safe = "Game";
-            string outDir = Path.Combine(_project.Path, "Builds", safe + "-win-x64");
-            Log($"Export: publishing Lumo.Runtime → {outDir}");
-            if (Directory.Exists(outDir)) Directory.Delete(outDir, true);
-            Directory.CreateDirectory(outDir);
-
-            var psi = new ProcessStartInfo
-            {
-                FileName = dotnet,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            psi.ArgumentList.Add("publish");
-            psi.ArgumentList.Add(runtimeProj);
-            psi.ArgumentList.Add("-c"); psi.ArgumentList.Add("Release");
-            psi.ArgumentList.Add("-r"); psi.ArgumentList.Add("win-x64");
-            psi.ArgumentList.Add("--self-contained"); psi.ArgumentList.Add("true");
-            psi.ArgumentList.Add("-o"); psi.ArgumentList.Add(outDir);
-            psi.ArgumentList.Add("--nologo");
-
-            using var proc = Process.Start(psi);
-            if (proc == null) { Log("Export failed: could not start dotnet."); return; }
-
-            int printed = 0;
-            void HandleLine(string? line)
-            {
-                if (line == null) return;
-                int n = Interlocked.Increment(ref printed);
-                bool important = line.Contains("error", StringComparison.OrdinalIgnoreCase)
-                              || line.Contains("succeeded", StringComparison.OrdinalIgnoreCase)
-                              || line.Contains("warning", StringComparison.OrdinalIgnoreCase);
-                if (n > 40 && !important) return;
-                string text = line;
-                Avalonia.Threading.Dispatcher.UIThread.Post(() => Log($"[pub] {text}"));
-            }
-
-            proc.OutputDataReceived += (_, e) => HandleLine(e.Data);
-            proc.ErrorDataReceived += (_, e) => HandleLine(e.Data);
-            proc.BeginOutputReadLine();
-            proc.BeginErrorReadLine();
-            await proc.WaitForExitAsync();
-
-            if (proc.ExitCode != 0) { Log($"Export failed (exit {proc.ExitCode})."); return; }
-
-            CopyProjectContent(outDir);
-            string exe = Path.Combine(outDir, "Lumo.Runtime.exe");
-            Log(File.Exists(exe) ? $"Export OK: {exe}" : $"Publish finished but exe not found: {exe}");
-        }
-        catch (Exception ex) { Log($"Export failed: {ex.Message}"); }
-        finally { _exporting = false; }
-    }
-
-    private void CopyProjectContent(string outDir)
-    {
-        string root = _project.Path;
-        foreach (string dir in new[] { "Scenes", "Graphs", "Scripts", "Assets" })
-        {
-            string src = Path.Combine(root, dir);
-            if (Directory.Exists(src))
-                CopyDirectory(src, Path.Combine(outDir, dir));
-        }
-        string projectFile = Path.Combine(root, "Project.json");
-        if (File.Exists(projectFile))
-            File.Copy(projectFile, Path.Combine(outDir, "Project.json"), true);
-    }
-
-    private static void CopyDirectory(string src, string dst)
-    {
-        Directory.CreateDirectory(dst);
-        foreach (string file in Directory.GetFiles(src))
-            File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), true);
-        foreach (string sub in Directory.GetDirectories(src))
-            CopyDirectory(sub, Path.Combine(dst, Path.GetFileName(sub)));
-    }
-
-    private static string? FindRuntimeProject()
-    {
-        string dir = AppContext.BaseDirectory;
-        for (int i = 0; i < 10 && !string.IsNullOrEmpty(dir); i++)
-        {
-            string candidate = Path.Combine(dir, "src", "Lumo.Runtime", "Lumo.Runtime.csproj");
-            if (File.Exists(candidate)) return candidate;
-            string flat = Path.Combine(dir, "Lumo.Runtime.csproj");
-            if (File.Exists(flat)) return flat;
-            dir = Path.GetDirectoryName(dir) ?? "";
-        }
-        return null;
-    }
-
-    private static string? FindDotnet()
-    {
-        var candidates = new List<string>();
-        string env = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "";
-        if (env.Length > 0) candidates.Add(env);
-        string self = Environment.ProcessPath ?? "";
-        if (self.Length > 0 && Path.GetFileName(self).StartsWith("dotnet", StringComparison.OrdinalIgnoreCase))
-            candidates.Add(self);
-        candidates.Add(@"C:\Program Files\dotnet\dotnet.exe");
-        candidates.Add(@"C:\Program Files (x86)\dotnet\dotnet.exe");
-        candidates.Add("/usr/share/dotnet/dotnet");
-        candidates.Add("/usr/local/share/dotnet/dotnet");
-        foreach (string c in candidates)
-            if (File.Exists(c)) return c;
-
-        foreach (string pathDir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
-        {
-            if (pathDir.Length == 0) continue;
-            string c = Path.Combine(pathDir, "dotnet.exe");
-            if (File.Exists(c)) return c;
-            c = Path.Combine(pathDir, "dotnet");
-            if (File.Exists(c)) return c;
-        }
-        return null;
+        var dlg = new ExportDialog(_project.Path, _project.Name, Log,
+            () => { SaveProject(); _graphsPanel?.SaveCurrentGraph(); });
+        if (TopLevel.GetTopLevel(this) is Window owner)
+            _ = dlg.ShowDialog(owner);
+        else
+            dlg.Show();
     }
 
     // ---------- Entity actions ----------
