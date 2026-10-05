@@ -4,10 +4,12 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Lumo.Editor.Store;
 using Lumo.Editor.Ui;
 using Lumo.Engine.Core;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 namespace Lumo.Editor.Views;
@@ -33,6 +35,13 @@ public class HomeView : UserControl
     private Panel? _layer;
     private Border? _dialogOverlay;
 
+    private Panel? _contentHost;
+    private Control? _projectsPage;
+    private AssetStorePanel? _storePage;
+    private Button? _tabProjectsBtn;
+    private Button? _tabStoreBtn;
+    private TextBlock? _footerCount;
+
     public HomeView(Action<string, string> onNewProject, Action<string> onOpenProject)
     {
         _onNewProject = onNewProject;
@@ -51,23 +60,60 @@ public class HomeView : UserControl
         DockPanel.SetDock(topBar, Dock.Top);
         root.Children.Add(topBar);
 
-        var toolbar = BuildToolbar();
-        DockPanel.SetDock(toolbar, Dock.Top);
-        root.Children.Add(toolbar);
+        _contentHost = new Panel();
+        root.Children.Add(_contentHost);
 
-        var footer = BuildFooter();
-        DockPanel.SetDock(footer, Dock.Bottom);
-        root.Children.Add(footer);
-
-        var rightPanel = BuildRightPanel();
-        DockPanel.SetDock(rightPanel, Dock.Right);
-        root.Children.Add(rightPanel);
-
-        root.Children.Add(BuildProjectList());
+        _projectsPage = BuildProjectsPage();
+        _contentHost.Children.Add(_projectsPage);
 
         _layer = new Panel { Children = { root } };
         Content = _layer;
         RefreshList();
+    }
+
+    // ---------- Projects page (toolbar + list + right panel + footer) ----------
+    private Control BuildProjectsPage()
+    {
+        var page = new DockPanel();
+
+        var toolbar = BuildToolbar();
+        DockPanel.SetDock(toolbar, Dock.Top);
+        page.Children.Add(toolbar);
+
+        var footer = BuildFooter();
+        DockPanel.SetDock(footer, Dock.Bottom);
+        page.Children.Add(footer);
+
+        var rightPanel = BuildRightPanel();
+        DockPanel.SetDock(rightPanel, Dock.Right);
+        page.Children.Add(rightPanel);
+
+        page.Children.Add(BuildProjectList());
+        return page;
+    }
+
+    // ---------- Home tabs: Projects <-> Asset Store ----------
+    private void ShowHomeTab(bool store)
+    {
+        if (_tabProjectsBtn != null)
+            _tabProjectsBtn.Content = TopTabContent(Icons.Folder, "Projects", !store);
+        if (_tabStoreBtn != null)
+            _tabStoreBtn.Content = TopTabContent(Icons.Grid, "Asset Store", store);
+
+        if (store)
+        {
+            // Lazy: the store panel starts loading from the live API on first open.
+            _storePage ??= new AssetStorePanel(() => "", _ => { });
+            if (_contentHost != null && !_contentHost.Children.Contains(_storePage))
+                _contentHost.Children.Add(_storePage);
+            _projectsPage!.IsVisible = false;
+            _storePage.IsVisible = true;
+        }
+        else
+        {
+            _projectsPage!.IsVisible = true;
+            if (_storePage != null) _storePage.IsVisible = false;
+        }
     }
 
     // ---------- New project dialog: root folder gets the project name ----------
@@ -218,6 +264,222 @@ public class HomeView : UserControl
         Avalonia.Threading.Dispatcher.UIThread.Post(() => nameBox.Focus());
     }
 
+    // ---------- Settings dialog: projects folder + store endpoint ----------
+    private void ShowSettingsDialog()
+    {
+        if (_layer == null || _dialogOverlay != null) return;
+
+        var status = UiTheme.Txt("", 11, UiTheme.Dim);
+        status.TextWrapping = TextWrapping.Wrap;
+
+        var rootBox = new TextBox
+        {
+            Text = ProjectManager.ProjectsRootPath,
+            FontSize = 13,
+            Width = 330,
+            Background = UiTheme.B(UiTheme.Panel),
+            Foreground = UiTheme.B(UiTheme.Text),
+            CaretBrush = UiTheme.B(UiTheme.Text),
+            BorderBrush = UiTheme.B(UiTheme.Border),
+            Padding = new Thickness(10, 8),
+        };
+
+        var storeBox = new TextBox
+        {
+            Text = StoreClient.DefaultStoreUrl,
+            FontSize = 13,
+            Width = 330,
+            Background = UiTheme.B(UiTheme.Panel),
+            Foreground = UiTheme.B(UiTheme.Text),
+            CaretBrush = UiTheme.B(UiTheme.Text),
+            BorderBrush = UiTheme.B(UiTheme.Border),
+            Padding = new Thickness(10, 8),
+        };
+
+        void CloseDialog()
+        {
+            if (_layer == null) return;
+            _layer.Children.Remove(_dialogOverlay!);
+            _dialogOverlay = null;
+        }
+
+        void SetStatus(string text, Color color)
+        {
+            status.Text = text;
+            status.Foreground = UiTheme.B(color);
+        }
+
+        async void Browse()
+        {
+            var topLevel = TopLevel.GetTopLevel(this);
+            if (topLevel == null) return;
+            var folders = await topLevel.StorageProvider.OpenFolderPickerAsync(
+                new FolderPickerOpenOptions
+                {
+                    Title = "Select the projects folder",
+                    AllowMultiple = false,
+                });
+            if (folders.Count > 0)
+            {
+                string? local = folders[0].TryGetLocalPath();
+                if (!string.IsNullOrEmpty(local)) rootBox.Text = local;
+            }
+        }
+
+        void ApplyRoot()
+        {
+            try
+            {
+                ProjectManager.SetProjectsRoot(rootBox.Text ?? "");
+                rootBox.Text = ProjectManager.ProjectsRootPath;
+                _projects = ProjectManager.GetAllProjects();
+                _filtered = _projects;
+                RefreshList();
+                if (_footerCount != null) _footerCount.Text = $"{_projects.Count} project(s)";
+                SetStatus("Projects folder saved.", UiTheme.Green);
+            }
+            catch (Exception ex)
+            {
+                SetStatus($"Could not save folder: {ex.Message}", UiTheme.Red);
+            }
+        }
+
+        void ApplyStore()
+        {
+            string url = (storeBox.Text ?? "").Trim().TrimEnd('/');
+            if (url.Length > 0 &&
+                !url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                SetStatus("Store URL must start with http:// or https://", UiTheme.Red);
+                return;
+            }
+            if (url.Equals(StoreClient.BuiltinStoreUrl, StringComparison.OrdinalIgnoreCase))
+                url = "";
+            EditorSettings.StoreUrl = url;
+            EditorSettings.Save();
+
+            // Rebuild the cached store page so the next open hits the new endpoint.
+            bool wasVisible = _storePage?.IsVisible == true;
+            if (_storePage != null)
+            {
+                _contentHost?.Children.Remove(_storePage);
+                _storePage = null;
+            }
+            if (wasVisible) ShowHomeTab(true);
+
+            storeBox.Text = StoreClient.DefaultStoreUrl;
+            SetStatus("Store URL saved.", UiTheme.Green);
+        }
+
+        void OpenProjectsFolder()
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = ProjectManager.ProjectsRootPath,
+                    UseShellExecute = true,
+                });
+            }
+            catch (Exception ex)
+            {
+                SetStatus($"Could not open folder: {ex.Message}", UiTheme.Red);
+            }
+        }
+
+        void OnBoxKeyDown(object? sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Escape) { e.Handled = true; CloseDialog(); }
+        }
+
+        rootBox.KeyDown += OnBoxKeyDown;
+        storeBox.KeyDown += OnBoxKeyDown;
+
+        Control FieldRow(string label, Control field, Action apply)
+            => new StackPanel
+            {
+                Spacing = 6,
+                Children =
+                {
+                    UiTheme.Txt(label, 11, UiTheme.Faint),
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Spacing = 8,
+                        Children = { field, UiTheme.ActionButton("Apply", null, apply) },
+                    },
+                },
+            };
+
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Children =
+            {
+                UiTheme.ActionButton("Open Projects Folder", null, OpenProjectsFolder),
+                UiTheme.ActionButton("Close", null, CloseDialog, primary: true),
+            },
+        };
+
+        var card = new Border
+        {
+            Background = UiTheme.B(UiTheme.Card),
+            BorderBrush = UiTheme.B(UiTheme.Border),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(24, 22),
+            Width = 620,
+            Child = new StackPanel
+            {
+                Spacing = 12,
+                Children =
+                {
+                    UiTheme.Txt("Settings", 15, UiTheme.Text, FontWeight.SemiBold),
+                    UiTheme.Txt($"{EngineConstants.Name} v{EngineConstants.Version}", 11, UiTheme.Faint),
+                    UiTheme.Divider(),
+                    UiTheme.Txt("Projects folder (holds all projects + projects.json)", 11, UiTheme.Faint),
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Spacing = 8,
+                        Children =
+                        {
+                            rootBox,
+                            UiTheme.ActionButton("Browse", null, Browse),
+                            UiTheme.ActionButton("Apply", null, ApplyRoot),
+                        },
+                    },
+                    FieldRow("Asset Store URL (base URL of the store API)", storeBox, ApplyStore),
+                    status,
+                    buttons,
+                },
+            },
+        };
+
+        var overlay = new Border
+        {
+            Background = new SolidColorBrush(Color.Parse("#b3060a12")),
+            Child = new Panel
+            {
+                Children =
+                {
+                    new Border
+                    {
+                        Child = card,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    }
+                }
+            }
+        };
+
+        _dialogOverlay = overlay;
+        _layer.Children.Add(overlay);
+        Avalonia.Threading.Dispatcher.UIThread.Post(() => rootBox.Focus());
+    }
+
     // ---------- Top bar (logo + tabs + settings) ----------
     private Control BuildTopBar()
     {
@@ -235,17 +497,18 @@ public class HomeView : UserControl
         };
         DockPanel.SetDock(logoRow, Dock.Left);
 
+        _tabProjectsBtn = TopTab(Icons.Folder, "Projects", true);
+        _tabStoreBtn = TopTab(Icons.Grid, "Asset Store", false);
+        _tabProjectsBtn.Click += (_, _) => ShowHomeTab(false);
+        _tabStoreBtn.Click += (_, _) => ShowHomeTab(true);
+
         var tabs = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 4,
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Center,
-            Children =
-            {
-                TopTab(Icons.Folder, "Projects", true),
-                TopTab(Icons.Grid, "Asset Store", false),
-            }
+            Children = { _tabProjectsBtn, _tabStoreBtn }
         };
 
         var settingsBtn = new Button
@@ -262,6 +525,7 @@ public class HomeView : UserControl
             BorderThickness = new Thickness(0),
             Cursor = new Cursor(StandardCursorType.Hand),
         };
+        settingsBtn.Click += (_, _) => ShowSettingsDialog();
         var right = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -286,20 +550,23 @@ public class HomeView : UserControl
         };
     }
 
-    private Control TopTab(string icon, string label, bool active)
+    private static Control TopTabContent(string icon, string label, bool active)
+        => new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 7,
+            Children =
+            {
+                UiTheme.Ico(icon, 14, active ? UiTheme.Cyan : UiTheme.Dim),
+                UiTheme.Txt(label, 13, active ? UiTheme.Text : UiTheme.Dim, active ? FontWeight.SemiBold : FontWeight.Normal),
+            }
+        };
+
+    private Button TopTab(string icon, string label, bool active)
     {
         return new Button
         {
-            Content = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 7,
-                Children =
-                {
-                    UiTheme.Ico(icon, 14, active ? UiTheme.Cyan : UiTheme.Dim),
-                    UiTheme.Txt(label, 13, active ? UiTheme.Text : UiTheme.Dim, active ? FontWeight.SemiBold : FontWeight.Normal),
-                }
-            },
+            Content = TopTabContent(icon, label, active),
             Padding = new Thickness(12, 6),
             Background = UiTheme.B(Colors.Transparent),
             BorderThickness = new Thickness(0),
@@ -624,8 +891,9 @@ public class HomeView : UserControl
     // ---------- Footer (version + project count) ----------
     private Control BuildFooter()
     {
-        var countTxt = UiTheme.Txt($"{_projects.Count} project(s)", 10, UiTheme.Faint);
-        countTxt.Margin = new Thickness(16, 0, 0, 0);
+        _footerCount = UiTheme.Txt($"{_projects.Count} project(s)", 10, UiTheme.Faint);
+        _footerCount.Margin = new Thickness(16, 0, 0, 0);
+        var countTxt = _footerCount;
 
         var versionTxt = UiTheme.TxtAt($"v{EngineConstants.Version}", 10, UiTheme.Faint, FontWeight.Normal, HorizontalAlignment.Right, new Thickness(0, 0, 16, 0));
 

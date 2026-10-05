@@ -7,6 +7,7 @@ using Lumo.Engine.Assets;
 using Lumo.Engine.Rendering;
 using Lumo.Engine.Rendering.Software;
 using Lumo.Engine.Scene;
+using Lumo.Plugins;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
@@ -112,6 +113,12 @@ public class SoftwareViewport : Control
         _lastMouse = e.GetPosition(this);
         Focus();
         var p = e.GetCurrentPoint(this).Properties;
+        if (ViewportHooks.HasSubscribers && DispatchPointer(ViewportPointerKind.Down, _lastMouse, p.IsLeftButtonPressed))
+        {
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            return;
+        }
         if (p.IsLeftButtonPressed)
         {
             Entity? hit = Mode == ViewportMode.Game ? null : Pick(_lastMouse);
@@ -145,6 +152,14 @@ public class SoftwareViewport : Control
 
     private void OnRelease(object? s, PointerReleasedEventArgs e)
     {
+        var props = e.GetCurrentPoint(this).Properties;
+        if (ViewportHooks.HasSubscribers && DispatchPointer(ViewportPointerKind.Up, e.GetPosition(this), props.IsLeftButtonPressed))
+        {
+            _dragEntity = null;
+            if (e.Pointer.Captured == this) e.Pointer.Capture(null);
+            e.Handled = true;
+            return;
+        }
         _dragEntity = null;
         _orbiting = false;
         _panning = false;
@@ -155,6 +170,16 @@ public class SoftwareViewport : Control
     private void OnMove(object? s, PointerEventArgs e)
     {
         var pos = e.GetPosition(this);
+        if (ViewportHooks.HasSubscribers)
+        {
+            var props = e.GetCurrentPoint(this).Properties;
+            if (DispatchPointer(ViewportPointerKind.Move, pos, props.IsLeftButtonPressed))
+            {
+                _lastMouse = pos;
+                e.Handled = true;
+                return;
+            }
+        }
         float dx = (float)(pos.X - _lastMouse.X);
         float dy = (float)(pos.Y - _lastMouse.Y);
         _lastMouse = pos;
@@ -238,6 +263,41 @@ public class SoftwareViewport : Control
     }
 
     // --------------------------------------------------------- picking
+
+    /// <summary>World-space ray through a viewport pixel (3D scene view only).</summary>
+    public bool TryGetRay(Point p, out Vector3 origin, out Vector3 dir)
+    {
+        origin = default;
+        dir = default;
+        if (Mode != ViewportMode.Scene) return false;
+
+        int w = Math.Max(1, (int)Bounds.Width);
+        int h = Math.Max(1, (int)Bounds.Height);
+        float ndcX = (float)(p.X / w) * 2f - 1f;
+        float ndcY = 1f - (float)(p.Y / h) * 2f;
+
+        var (pos, fwd, right, up) = GetSceneCamera();
+        float aspect = (float)w / h;
+        float tanHalf = MathF.Tan(60f * MathF.PI / 180f / 2f);
+        origin = pos;
+        dir = Vector3.Normalize(fwd + right * (ndcX * tanHalf * aspect) + up * (ndcY * tanHalf));
+        return true;
+    }
+
+    private bool DispatchPointer(ViewportPointerKind kind, Point pos, bool leftPressed)
+    {
+        bool hasRay = TryGetRay(pos, out var ro, out var rd);
+        return ViewportHooks.Dispatch(new ViewportPointerArgs
+        {
+            Kind = kind,
+            X = pos.X,
+            Y = pos.Y,
+            LeftPressed = leftPressed,
+            HasRay = hasRay,
+            RayOrigin = ro,
+            RayDir = rd,
+        });
+    }
 
     /// <summary>Screen point → world point on the plane Z = planeZ (null in Game view).</summary>
     private Vector3? ScreenToWorld(Point p, float planeZ)
@@ -646,11 +706,14 @@ public class SoftwareViewport : Control
         }
         tris.Sort((x, y) => y.depth.CompareTo(x.depth));
 
-        // Dense meshes render solid; stroking every triangle is too expensive.
-        Pen? fillEdge = idx.Length > 10_000 ? null : edge;
-
         var vcols = mesh.VertexColors;
         bool hasVc = vcols.Length == world.Length * 4;
+
+        // Dense meshes render solid; stroking every triangle is too expensive.
+        // Vertex-colored meshes (terrain, baked glTF) also render solid: their
+        // triangles are small on screen and the 1.4px strokes overlap until the
+        // whole surface becomes flat edge color, hiding the baked colors.
+        Pen? fillEdge = hasVc || idx.Length > 10_000 ? null : edge;
 
         foreach (var (_, ai, bi, ci, x0, y0, x1, y1, x2, y2) in tris)
         {

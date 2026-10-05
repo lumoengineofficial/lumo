@@ -48,6 +48,9 @@ public sealed class PluginContext
     /// <summary>Writes a line to the host's plugin log (editor Output panel, game console).</summary>
     public void Log(string message) => _log(message);
 
+    /// <summary>Host services (scene, undo, file dialogs); may be null in bare hosts.</summary>
+    public IHostBridge? Bridge => PluginHost.Bridge;
+
     /// <summary>Registers every [GraphNode] type in the plugin assembly.</summary>
     public void RegisterNodes() => NodeRegistry.ScanAssembly(PluginAssembly);
 

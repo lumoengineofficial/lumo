@@ -15,19 +15,46 @@ public class ProjectInfo
 
 public static class ProjectManager
 {
-    private static readonly string ProjectsRoot;
+    private static readonly string DefaultProjectsRoot;
     private static readonly string RegistryFile;
+    private static string ProjectsRoot;
 
     static ProjectManager()
     {
-        ProjectsRoot = Path.Combine(
+        DefaultProjectsRoot = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
             "LumoProjects");
-        Directory.CreateDirectory(ProjectsRoot);
-        RegistryFile = Path.Combine(ProjectsRoot, "projects.json");
+        Directory.CreateDirectory(DefaultProjectsRoot);
+
+        string overrideRoot = EditorSettings.ProjectsRoot;
+        ProjectsRoot = string.IsNullOrWhiteSpace(overrideRoot) ? DefaultProjectsRoot : overrideRoot;
+        try { Directory.CreateDirectory(ProjectsRoot); }
+        catch { ProjectsRoot = DefaultProjectsRoot; }
+
+        // The registry always lives at the default root so projects registered
+        // before a folder change keep loading.
+        RegistryFile = Path.Combine(DefaultProjectsRoot, "projects.json");
     }
 
     public static string ProjectsRootPath => ProjectsRoot;
+
+    /// <summary>Point the project list at a different folder (persisted). Empty resets to the default.</summary>
+    public static void SetProjectsRoot(string path)
+    {
+        string trimmed = (path ?? "").Trim();
+        if (trimmed.Length == 0)
+        {
+            EditorSettings.ProjectsRoot = "";
+            ProjectsRoot = DefaultProjectsRoot;
+        }
+        else
+        {
+            Directory.CreateDirectory(trimmed);
+            EditorSettings.ProjectsRoot = trimmed;
+            ProjectsRoot = Path.GetFullPath(trimmed);
+        }
+        EditorSettings.Save();
+    }
 
     public static List<ProjectInfo> GetAllProjects()
     {

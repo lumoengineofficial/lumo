@@ -21,6 +21,7 @@
     <ProjectReference Include="..\Lumo.Plugins\Lumo.Plugins.csproj" />
     <!-- Build-order only: the sample plugin deploys itself to Plugins/. -->
     <ProjectReference Include="..\Lumo.SamplePlugin\Lumo.SamplePlugin.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\Lumo.TerrainPlugin\Lumo.TerrainPlugin.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>

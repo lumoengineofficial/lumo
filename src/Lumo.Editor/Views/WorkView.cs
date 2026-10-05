@@ -34,7 +34,7 @@ using SceneType = Lumo.Engine.Scene.Scene;
 
 namespace Lumo.Editor.Views;
 
-public class WorkView : UserControl
+public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
 {
     private readonly LumoEngine _engine;
     private SceneType _scene;
@@ -86,6 +86,7 @@ public class WorkView : UserControl
     private readonly ScriptHost _scriptHost = new();
     private GamePlayWindow? _gameWindow;
     private GraphsPanel? _graphsPanel;
+    private AssetStorePanel? _storePanel;
     private MenuFlyout? _projectFlyout;
     private MenuFlyout? _editFlyout;
     private readonly HistoryStack _sceneHistory = new();
@@ -107,8 +108,10 @@ public class WorkView : UserControl
 
         // Plugins must be registered before project graphs are read so their
         // node types resolve (engine-level Plugins/ + project Plugins/).
+        PluginHost.SetBridge(this);
         PluginHost.AttachSink(Log);
         PluginHost.LoadDefault(project.Path);
+        PluginCommands.Changed += RebuildPluginCommandBar;
 
         ScriptHost.MessageLogged += OnScriptMessage;
 
@@ -136,6 +139,11 @@ public class WorkView : UserControl
         int meshes = ObjImporter.RegisterDirectory(assetsDir) + GltfImporter.RegisterDirectory(assetsDir);
         if (meshes > 0)
             Log($"Registered {meshes} mesh(es) from Assets.");
+
+        // Plugins may persist external state (e.g. terrain heightmaps) that must
+        // reattach entities to the freshly loaded scene.
+        try { PluginCommands.TryInvoke("lumo.terrain.sync"); }
+        catch (Exception ex) { Log($"Plugin sync failed: {ex.Message}"); }
     }
 
     private void SaveProject()
@@ -214,6 +222,7 @@ public class WorkView : UserControl
 
     private void StartPlay()
     {
+        ViewportHooks.Enabled = false;
         if (_gameWindow != null)
         {
             _gameWindow.Activate();
@@ -241,6 +250,7 @@ public class WorkView : UserControl
         _graphsPanel?.ShowDebug([]);
         _engine.Stop();
         _isPlaying = false;
+        ViewportHooks.Enabled = true;
         RefreshPlayButton();
         Log("Game window closed.");
     }
@@ -259,6 +269,7 @@ public class WorkView : UserControl
         _graphsPanel?.ShowDebug([]);
         _engine.Stop();
         _isPlaying = false;
+        ViewportHooks.Enabled = true;
         Log("Stopped.");
     }
 
@@ -280,6 +291,10 @@ public class WorkView : UserControl
         DockPanel.SetDock(topbar, Dock.Top);
         root.Children.Add(topbar);
 
+        var pluginBar = BuildPluginCommandBar();
+        DockPanel.SetDock(pluginBar, Dock.Top);
+        root.Children.Add(pluginBar);
+
         var bottom = BuildBottomPanel();
         DockPanel.SetDock(bottom, Dock.Bottom);
         root.Children.Add(bottom);
@@ -295,6 +310,7 @@ public class WorkView : UserControl
 
         root.Children.Add(BuildCenterArea());
         Content = root;
+        _uiBuilt = true;
     }
 
     // ---------- Top bar: menu + mode tabs + playback ----------
@@ -872,16 +888,16 @@ public class WorkView : UserControl
         {
             "Script" => BuildScriptsPanel(),
             "Graphs" => BuildGraphsPanel(),
-            "Asset Store" => BuildAssetStorePlaceholder(),
+            "Asset Store" => BuildAssetStorePanel(),
             _ => BuildViewportArea(),
         };
     }
 
-    private Control BuildAssetStorePlaceholder() => new StackPanel
+    private Control BuildAssetStorePanel()
     {
-        Margin = new Thickness(30, 60), Spacing = 8, HorizontalAlignment = HorizontalAlignment.Center,
-        Children = { UiTheme.Ico(Icons.Upload, 40, UiTheme.Faint), UiTheme.TxtAt("Lumo Asset Store", 15, UiTheme.Dim, FontWeight.Medium, HorizontalAlignment.Center), UiTheme.TxtAt("Not connected yet.", 11, UiTheme.Faint, FontWeight.Normal, HorizontalAlignment.Center) }
-    };
+        _storePanel ??= new AssetStorePanel(() => _project.Path, Log, RefreshFileTree);
+        return _storePanel;
+    }
 
     // ---------- Visual scripting (Graphs mode) ----------
     private Control BuildGraphsPanel()

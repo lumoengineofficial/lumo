@@ -14,6 +14,14 @@ public static class PluginHost
 
     public static IReadOnlyList<string> Messages => Loader.Messages;
 
+    /// <summary>
+    /// Host services (scene ops, undo, file dialogs) for plugin commands.
+    /// Set by the editor before <see cref="LoadDefault"/>; null in bare hosts.
+    /// </summary>
+    public static IHostBridge? Bridge { get; private set; }
+
+    public static void SetBridge(IHostBridge? bridge) => Bridge = bridge;
+
     public static void AttachSink(Action<string> sink) => Loader.AttachSink(sink);
 
     public static void DetachSink(Action<string> sink) => Loader.DetachSink(sink);
