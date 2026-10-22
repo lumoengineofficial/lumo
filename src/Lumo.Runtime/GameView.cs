@@ -595,6 +595,11 @@ public sealed class GameView : Control
         (byte)Math.Clamp(baseColor.Y * brightness * 255f, 0, 255),
         (byte)Math.Clamp(baseColor.Z * brightness * 255f, 0, 255));
 
+    private static Color ShadeColor(Vector3 litRgb) => Color.FromRgb(
+        (byte)Math.Clamp(litRgb.X * 255f, 0, 255),
+        (byte)Math.Clamp(litRgb.Y * 255f, 0, 255),
+        (byte)Math.Clamp(litRgb.Z * 255f, 0, 255));
+
     private static void DrawCube(DrawingContext ctx, Entity entity, Matrix4x4 view, Matrix4x4 proj, Vector3 camPos, bool shading, int w, int h)
     {
         Vector3 center = entity.Transform.Position;
@@ -642,8 +647,13 @@ public sealed class GameView : Control
 
             Vector3 normal = Vector3.Normalize(Vector3.Cross(verts[f[1]] - verts[f[0]], verts[f[2]] - verts[f[0]]));
             Vector3 mid = (verts[f[0]] + verts[f[2]]) * 0.5f;
-            float brightness = shading ? FxLighting.Brightness(normal, camPos - mid) : 1f;
-            var fill = new SolidColorBrush(ShadeColor(baseColor, brightness));
+            var mrc = entity.MeshRenderer;
+            Color faceColor = (shading || mrc is { Emissive: > 0f })
+                ? ShadeColor(FxLighting.Shade(normal, camPos - mid, baseColor,
+                    mrc?.Metallic ?? 0f, mrc?.Roughness ?? 0.7f,
+                    mrc?.Emissive ?? 0f, mrc?.EmissiveColor ?? Vector3.One))
+                : ShadeColor(baseColor, 1f);
+            var fill = new SolidColorBrush(faceColor);
             ctx.DrawGeometry(fill, edge, geo);
         }
     }
@@ -653,7 +663,8 @@ public sealed class GameView : Control
         var m = entity.Transform.LocalToWorldMatrix;
         var verts = mesh.Vertices;
         var idx = mesh.Indices;
-        var baseColor = entity.MeshRenderer?.Color ?? new Vector3(0.55f, 0.62f, 0.75f);
+        var mr = entity.MeshRenderer;
+        var baseColor = mr?.Color ?? new Vector3(0.55f, 0.62f, 0.75f);
 
         var world = new Vector3[verts.Length / 3];
         for (int i = 0; i < world.Length; i++)
@@ -705,8 +716,19 @@ public sealed class GameView : Control
 
             Vector3 normal = Vector3.Normalize(Vector3.Cross(world[bi] - world[ai], world[ci] - world[ai]));
             Vector3 centroid = (world[ai] + world[bi] + world[ci]) / 3f;
-            float brightness = shading ? FxLighting.Brightness(normal, camPos - centroid) : 1f;
-            ctx.DrawGeometry(new SolidColorBrush(ShadeColor(fill, brightness)), edge, geo);
+            Color shaded;
+            if (shading || mr is { Emissive: > 0f })
+            {
+                var lit = FxLighting.Shade(normal, camPos - centroid, fill,
+                    mr?.Metallic ?? 0f, mr?.Roughness ?? 0.7f,
+                    mr?.Emissive ?? 0f, mr?.EmissiveColor ?? Vector3.One);
+                shaded = ShadeColor(lit);
+            }
+            else
+            {
+                shaded = ShadeColor(fill, 1f);
+            }
+            ctx.DrawGeometry(new SolidColorBrush(shaded), edge, geo);
         }
     }
 }

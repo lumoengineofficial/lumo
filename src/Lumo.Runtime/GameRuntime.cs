@@ -1,3 +1,4 @@
+using Lumo.Engine.Assets;
 using Lumo.Engine.Core;
 using Lumo.Engine.Input;
 using Lumo.Engine.Scene;
@@ -83,6 +84,20 @@ public sealed class GameRuntime : IDisposable
                     Scene = Scene.Load(scenes[0]);
             }
 
+            // Register the project's models so MeshRenderer entities and
+            // scripts (Place/Scatter) find their meshes — the editor does this
+            // on import, a standalone run has no editor to do it for us.
+            int models = 0;
+            foreach (string dir in new[] { "Assets", "Models" })
+            {
+                string full = Path.Combine(projectDir, dir);
+                if (!Directory.Exists(full)) continue;
+                models += GltfImporter.RegisterDirectory(full);
+                models += ObjImporter.RegisterDirectory(full);
+            }
+            if (models > 0)
+                Log($"Registered {models} model(s) from project assets.");
+
             string graphsDir = Path.Combine(projectDir, "Graphs");
             if (Directory.Exists(graphsDir))
                 _graphFiles.AddRange(Directory.GetFiles(graphsDir, "*.graph.json"));
@@ -152,6 +167,7 @@ public sealed class GameRuntime : IDisposable
             }
         }
         _graphs.Start();
+        ScriptHost.Hud = Hud;
 
         if (_scriptSources.Count > 0)
         {
@@ -200,6 +216,7 @@ public sealed class GameRuntime : IDisposable
 
     public void Dispose()
     {
+        ScriptHost.Hud = null;
         if (_pluginLogSink != null)
             PluginHost.DetachSink(_pluginLogSink);
         if (_started && _scripts.IsRunning)
