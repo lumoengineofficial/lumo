@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/lumoengineofficial/lumo/actions/workflows/dotnet.yml"><img src="https://github.com/lumoengineofficial/lumo/actions/workflows/dotnet.yml/badge.svg" alt="Build"/></a>
-  <img src="https://img.shields.io/badge/tests-127%20passed-brightgreen" alt="Tests"/>
+  <img src="https://img.shields.io/badge/tests-162%20passed-brightgreen" alt="Tests"/>
   <a href="https://github.com/lumoengineofficial/lumo/releases"><img src="https://img.shields.io/github/v/release/lumoengineofficial/lumo" alt="Release"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"/></a>
 </p>
@@ -25,7 +25,7 @@
 - **Scripting** — attach C# scripts to actors directly from the editor
 - **Project system** — create / open / save projects, FileSystem asset browser, one-click build & run
 - **Runtime** — standalone game player (`Lumo.Runtime`) plus plugins support
-- **Quality** — 127 xUnit tests, GitHub Actions CI on every push
+- **Quality** — 162 xUnit tests, GitHub Actions CI on every push
 
 ## Download
 
@@ -52,6 +52,30 @@ Run the editor:
 ```bash
 dotnet run --project src/Lumo.Editor
 ```
+
+## Packaging (release zips)
+
+```bash
+powershell -ExecutionPolicy Bypass -File tools/pack.ps1
+```
+
+Produces self-contained `dist/LumoEngine-<version>-win-x64.zip` (editor) and
+`dist/Wildlands-<version>-win-x64.zip` (sample game) — no .NET install needed
+on the target machine. Use `-SkipEditor` / `-SkipGame` for one of the two.
+
+Known limitations are tracked in [KNOWN_BUGS.md](KNOWN_BUGS.md).
+
+### Installer (setuplumo.exe)
+
+```bash
+powershell -ExecutionPolicy Bypass -File tools/mkesetup.ps1
+```
+
+Produces `dist/setuplumo.exe` — a Windows installer (Inno Setup 6) that installs
+the editor + bundled Wildlands project, optionally the standalone game player,
+and creates Start Menu / desktop shortcuts. One-shot: runs `pack.ps1 -KeepStage`
+then compiles `tools/setup.iss`. Requires Inno Setup 6
+(`winget install JRSoftware.InnoSetup`).
 
 ## Projects
 

@@ -28,3 +28,6 @@ MSBuild_*.failure.txt
 
 # Temp screenshots
 _*.png
+
+# Packaging output
+dist/
