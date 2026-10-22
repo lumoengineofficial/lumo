@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/lumoengineofficial/lumo/actions/workflows/dotnet.yml"><img src="https://github.com/lumoengineofficial/lumo/actions/workflows/dotnet.yml/badge.svg" alt="Build"/></a>
-  <img src="https://img.shields.io/badge/tests-162%20passed-brightgreen" alt="Tests"/>
+  <img src="https://img.shields.io/badge/tests-164%20passed-brightgreen" alt="Tests"/>
   <a href="https://github.com/lumoengineofficial/lumo/releases"><img src="https://img.shields.io/github/v/release/lumoengineofficial/lumo" alt="Release"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"/></a>
 </p>
@@ -25,7 +25,7 @@
 - **Scripting** — attach C# scripts to actors directly from the editor
 - **Project system** — create / open / save projects, FileSystem asset browser, one-click build & run
 - **Runtime** — standalone game player (`Lumo.Runtime`) plus plugins support
-- **Quality** — 162 xUnit tests, GitHub Actions CI on every push
+- **Quality** — 164 xUnit tests, GitHub Actions CI on every push
 
 ## Download
 
