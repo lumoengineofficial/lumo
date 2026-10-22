@@ -20,6 +20,12 @@ public sealed class ScriptHost
 
     public static event Action<string>? MessageLogged;
 
+    /// <summary>
+    /// HUD layer scripts write to. The game runtime wires this to the
+    /// active HudLayer before scripts start; null outside play mode.
+    /// </summary>
+    public static VisualScripting.HudLayer? Hud { get; set; }
+
     public IReadOnlyList<string> Errors => _errors;
     private readonly List<string> _errors = [];
     public bool IsCompiled => _assembly != null;

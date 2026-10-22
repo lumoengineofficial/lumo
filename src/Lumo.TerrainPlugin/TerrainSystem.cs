@@ -1,5 +1,6 @@
 using System.Numerics;
 using Lumo.Engine.Assets;
+using Lumo.Engine.Physics;
 using Lumo.Plugins;
 
 namespace Lumo.TerrainPlugin;
@@ -44,6 +45,7 @@ public static class TerrainSystem
     {
         int s = seed ?? Random.Shared.Next();
         Map = TerrainGenerator.Generate(DefaultResolution, DefaultWorldSize, DefaultHeightScale, s);
+        World.TerrainHeight = SampleHeight;
         RebuildChunks();
         SyncEntities(bridge, replace: true);
         Save(bridge);
@@ -87,6 +89,7 @@ public static class TerrainSystem
         }
 
         Map = map;
+        World.TerrainHeight = SampleHeight;
         RebuildChunks();
         SyncEntities(bridge, replace: true);
         Save(bridge);
@@ -160,6 +163,7 @@ public static class TerrainSystem
             return;
         }
         Map = map;
+        World.TerrainHeight = SampleHeight;
         RebuildChunks();
         log($"Terrain restored: {map.Width}×{map.Height}, {ChunkCountX * ChunkCountZ} chunk(s).");
     }
@@ -302,6 +306,7 @@ public static class TerrainSystem
     public static void Reset()
     {
         Map = null;
+        World.TerrainHeight = null;
         ActiveBrush = null;
         BrushRadius = 6f;
         _strokeActive = false;

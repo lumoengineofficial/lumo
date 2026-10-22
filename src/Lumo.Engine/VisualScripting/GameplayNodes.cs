@@ -267,9 +267,9 @@ public sealed class LookNode : VSNode
 // ---------------------------------------------------------------- Physics
 
 /// <summary>World-space AABB of a collidable mesh entity.</summary>
-internal readonly record struct Obstacle(Entity Entity, Vector3 Min, Vector3 Max);
+public readonly record struct Obstacle(Entity Entity, Vector3 Min, Vector3 Max);
 
-internal static class PhysicsHelper
+public static class PhysicsHelper
 {
     public static List<Obstacle> Collect(
         Scene.Scene? scene, Entity? self, Entity? ignore,
@@ -361,6 +361,7 @@ public sealed class MoveSlideNode : VSNode
         DataIn("delta", PinDataType.Vector3);
         DataIn("radius", PinDataType.Float, "0.35");
         DataIn("ignore", PinDataType.Entity);
+        DataIn("excludePrefix", PinDataType.String, "");
         DataOut("position", PinDataType.Vector3);
         DataOut("blocked", PinDataType.Bool);
     }
@@ -374,7 +375,8 @@ public sealed class MoveSlideNode : VSNode
         Vector3 delta = ctx.Get<Vector3>(this, "delta");
         float radius = ctx.Get<float>(this, "radius");
         Entity? ignore = ctx.Get<Entity>(this, "ignore");
-        List<Obstacle> obstacles = PhysicsHelper.Collect(ctx.Scene, target, ignore);
+        string exclude = ctx.Get<string>(this, "excludePrefix");
+        List<Obstacle> obstacles = PhysicsHelper.Collect(ctx.Scene, target, ignore, excludePrefix: exclude);
 
         Vector3 pos = target.Transform.Position;
         bool blocked = false;
