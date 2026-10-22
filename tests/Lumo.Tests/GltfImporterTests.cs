@@ -1,3 +1,4 @@
+using System.Text;
 using Lumo.Engine.Assets;
 using SkiaSharp;
 
@@ -313,6 +314,170 @@ public class GltfImporterTests
         string file = Path.Combine(dir, "grid.gltf");
         File.WriteAllText(file, json);
         return file;
+    }
+
+    [Fact]
+    public void Load_FactorOnlyMaterial_BakesVertexColorsWithoutTexture()
+    {
+        string dir = TempDir();
+        try
+        {
+            string file = WriteTriangleGltf(dir);
+            string json = File.ReadAllText(file);
+            json = json.Replace(
+                "\"accessors\": [",
+                "\"materials\": [ { \"pbrMetallicRoughness\": { \"baseColorFactor\": [ 0.8, 0.2, 0.3, 1 ] } } ], \"accessors\": [");
+            json = json.Replace(
+                "\"attributes\": { \"POSITION\": 0, \"NORMAL\": 1 },",
+                "\"attributes\": { \"POSITION\": 0, \"NORMAL\": 1 }, \"material\": 0,");
+            File.WriteAllText(file, json);
+
+            var mesh = GltfImporter.Load(file);
+
+            Assert.False(mesh.HasTexture);
+            Assert.Equal(12, mesh.VertexColors.Length);
+            for (int i = 0; i < 3; i++)
+            {
+                Assert.Equal(0.8f, mesh.VertexColors[i * 4], 2);
+                Assert.Equal(0.2f, mesh.VertexColors[i * 4 + 1], 2);
+                Assert.Equal(0.3f, mesh.VertexColors[i * 4 + 2], 2);
+                Assert.Equal(1f, mesh.VertexColors[i * 4 + 3], 2);
+            }
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    // ---------- binary glTF (.glb) ----------
+
+    /// <summary>Wraps the triangle payload + JSON (URI-less buffer) into a .glb container.</summary>
+    private static string WriteTriangleGlb(string dir, string name = "triglb")
+    {
+        var payload = new byte[78];
+        Buffer.BlockCopy(BitConverter.GetBytes(0f), 0, payload, 0, 4);
+        Buffer.BlockCopy(BitConverter.GetBytes(1f), 0, payload, 12, 4);
+        Buffer.BlockCopy(BitConverter.GetBytes(1f), 0, payload, 28, 4);
+        Buffer.BlockCopy(BitConverter.GetBytes((ushort)1), 0, payload, 72, 2);
+        Buffer.BlockCopy(BitConverter.GetBytes((ushort)2), 0, payload, 74, 2);
+
+        string json = """
+            {
+              "asset": { "version": "2.0" },
+              "scenes": [ { "nodes": [ 0 ] } ],
+              "nodes": [ { "mesh": 0, "translation": [ 10, 0, 0 ] } ],
+              "meshes": [ {
+                "primitives": [ {
+                  "attributes": { "POSITION": 0, "NORMAL": 1 },
+                  "indices": 2
+                } ]
+              } ],
+              "accessors": [
+                { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                  "min": [ 0, 0, 0 ], "max": [ 1, 1, 0 ] },
+                { "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3" },
+                { "bufferView": 2, "componentType": 5123, "count": 3, "type": "SCALAR" }
+              ],
+              "bufferViews": [
+                { "buffer": 0, "byteOffset": 0,  "byteLength": 36 },
+                { "buffer": 0, "byteOffset": 36, "byteLength": 36 },
+                { "buffer": 0, "byteOffset": 72, "byteLength": 6 }
+              ],
+              "buffers": [ { "byteLength": 78 } ]
+            }
+            """;
+
+        byte[] jsonBytes = Encoding.UTF8.GetBytes(json);
+        int jsonPad = (4 - jsonBytes.Length % 4) % 4;
+        byte[] jsonChunk = new byte[jsonBytes.Length + jsonPad];
+        jsonBytes.CopyTo(jsonChunk, 0);
+        for (int i = jsonBytes.Length; i < jsonChunk.Length; i++) jsonChunk[i] = (byte)' ';
+
+        int binPad = (4 - payload.Length % 4) % 4;
+        byte[] binChunk = new byte[payload.Length + binPad];
+        payload.CopyTo(binChunk, 0);
+
+        int total = 12 + 8 + jsonChunk.Length + 8 + binChunk.Length;
+        var glb = new byte[total];
+        WriteU32(glb, 0, 0x46546C67);                 // 'glTF'
+        WriteU32(glb, 4, 2);                          // version
+        WriteU32(glb, 8, (uint)total);                // container length
+        WriteU32(glb, 12, (uint)jsonChunk.Length);    // JSON chunk length
+        WriteU32(glb, 16, 0x4E4F534A);                // 'JSON'
+        jsonChunk.CopyTo(glb, 20);
+        int offset = 20 + jsonChunk.Length;
+        WriteU32(glb, offset, (uint)binChunk.Length); // BIN chunk length
+        WriteU32(glb, offset + 4, 0x004E4942);        // 'BIN\0'
+        binChunk.CopyTo(glb, offset + 8);
+
+        string file = Path.Combine(dir, name + ".glb");
+        File.WriteAllBytes(file, glb);
+        return file;
+    }
+
+    private static void WriteU32(byte[] buf, int offset, uint value)
+        => Buffer.BlockCopy(BitConverter.GetBytes(value), 0, buf, offset, 4);
+
+    [Fact]
+    public void Load_Glb_ReadsGeometryAndBakesNodeTransform()
+    {
+        string dir = TempDir();
+        try
+        {
+            string file = WriteTriangleGlb(dir);
+
+            var mesh = GltfImporter.Load(file);
+
+            Assert.Equal("triglb", mesh.Name);
+            Assert.Equal(3, mesh.VertexCount);
+            Assert.Equal(1, mesh.TriangleCount);
+            Assert.Equal(10f, mesh.Vertices[0], 3);
+            Assert.Equal(11f, mesh.Vertices[3], 3);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void RegisterDirectory_RegistersGlb()
+    {
+        string dir = TempDir();
+        try
+        {
+            WriteTriangleGlb(dir, "glbmodel");
+
+            int count = GltfImporter.RegisterDirectory(dir);
+
+            Assert.Equal(1, count);
+            Assert.True(MeshLibrary.Contains("glbmodel"));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void GetReferencedUris_Glb_ReturnsEmpty()
+    {
+        string dir = TempDir();
+        try
+        {
+            string file = WriteTriangleGlb(dir);
+
+            var uris = GltfImporter.GetReferencedUris(file);
+
+            Assert.Empty(uris);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Load_UrilessBufferOutsideGlb_StillThrows()
+    {
+        string dir = TempDir();
+        try
+        {
+            string file = WriteTriangleGltf(dir);
+            File.WriteAllText(file, File.ReadAllText(file).Replace($"\"uri\": \"tri.bin\", ", ""));
+
+            Assert.Throws<NotSupportedException>(() => GltfImporter.Load(file));
+        }
+        finally { Directory.Delete(dir, true); }
     }
 
     private static void WriteF(byte[] buf, ref int p, float v)

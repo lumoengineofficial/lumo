@@ -145,6 +145,11 @@ public sealed class MeshRendererData
     public string? MaterialName { get; set; }
     public bool IsVisible { get; set; } = true;
     public float[] Color { get; set; } = [0.55f, 0.62f, 0.75f];
+    public float Metallic { get; set; }
+    public float Roughness { get; set; } = 0.7f;
+    public float Emissive { get; set; }
+    public float[]? EmissiveColor { get; set; }
+    public string? NormalMap { get; set; }
 }
 
 public sealed class SpriteRendererData

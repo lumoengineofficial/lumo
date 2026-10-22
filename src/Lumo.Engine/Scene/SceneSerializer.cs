@@ -39,12 +39,18 @@ public static class SceneSerializer
 
         if (entity.MeshRenderer != null)
         {
+            var mr = entity.MeshRenderer;
             entityData.MeshRenderer = new MeshRendererData
             {
-                MeshName = entity.MeshRenderer.MeshName,
-                MaterialName = entity.MeshRenderer.MaterialName,
-                IsVisible = entity.MeshRenderer.IsVisible,
-                Color = [entity.MeshRenderer.Color.X, entity.MeshRenderer.Color.Y, entity.MeshRenderer.Color.Z]
+                MeshName = mr.MeshName,
+                MaterialName = mr.MaterialName,
+                IsVisible = mr.IsVisible,
+                Color = [mr.Color.X, mr.Color.Y, mr.Color.Z],
+                Metallic = mr.Metallic,
+                Roughness = mr.Roughness,
+                Emissive = mr.Emissive,
+                EmissiveColor = [mr.EmissiveColor.X, mr.EmissiveColor.Y, mr.EmissiveColor.Z],
+                NormalMap = mr.NormalMap
             };
         }
 
@@ -145,7 +151,14 @@ public static class SceneSerializer
                     IsVisible = entityData.MeshRenderer.IsVisible,
                     Color = entityData.MeshRenderer.Color is { Length: >= 3 } c
                         ? new Vector3(c[0], c[1], c[2])
-                        : new Vector3(0.55f, 0.62f, 0.75f)
+                        : new Vector3(0.55f, 0.62f, 0.75f),
+                    Metallic = entityData.MeshRenderer.Metallic,
+                    Roughness = entityData.MeshRenderer.Roughness,
+                    Emissive = entityData.MeshRenderer.Emissive,
+                    EmissiveColor = entityData.MeshRenderer.EmissiveColor is { Length: >= 3 } ec
+                        ? new Vector3(ec[0], ec[1], ec[2])
+                        : Vector3.One,
+                    NormalMap = entityData.MeshRenderer.NormalMap
                 };
             }
 

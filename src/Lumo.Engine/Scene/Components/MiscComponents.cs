@@ -9,6 +9,15 @@ public sealed class MeshRendererComponent
     public string? MaterialName { get; set; }
     public bool IsVisible { get; set; } = true;
     public System.Numerics.Vector3 Color { get; set; } = new(0.55f, 0.62f, 0.75f);
+
+    // PBR params — edited in the inspector, round-trip through scene JSON.
+    public float Metallic { get; set; }
+    public float Roughness { get; set; } = 0.7f;
+    /// <summary>0..1 self-illumination strength (glow, unaffected by light).</summary>
+    public float Emissive { get; set; }
+    public System.Numerics.Vector3 EmissiveColor { get; set; } = System.Numerics.Vector3.One;
+    /// <summary>Optional normal-map texture path (project-relative).</summary>
+    public string? NormalMap { get; set; }
 }
 
 /// <summary>

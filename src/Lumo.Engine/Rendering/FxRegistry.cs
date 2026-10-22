@@ -70,4 +70,31 @@ public static class FxLighting
         float diffuse = MathF.Max(Vector3.Dot(n, -LightDirection), 0f);
         return Ambient + (1f - Ambient) * diffuse;
     }
+
+    /// <summary>
+    /// Material-aware shade: lambert diffuse + Blinn specular tinted by
+    /// metallic, with roughness controlling highlight sharpness, plus an
+    /// emissive term that ignores lighting. Returns the final 0..1+ RGB.
+    /// </summary>
+    public static Vector3 Shade(Vector3 worldNormal, Vector3 toCamera, Vector3 albedo,
+        float metallic, float roughness, float emissive, Vector3 emissiveColor)
+    {
+        Vector3 n = worldNormal;
+        Vector3 v = Vector3.Normalize(toCamera);
+        if (Vector3.Dot(n, v) < 0f) n = -n;
+
+        Vector3 l = -LightDirection;
+        float ndl = MathF.Max(Vector3.Dot(n, l), 0f);
+        float diffuse = Ambient + (1f - Ambient) * ndl;
+
+        // Specular: roughness 0 -> tight hot highlight, roughness 1 -> none.
+        float shininess = 2f + 128f * (1f - roughness) * (1f - roughness);
+        Vector3 h = Vector3.Normalize(l + v);
+        float spec = MathF.Pow(MathF.Max(Vector3.Dot(n, h), 0f), shininess) * (1f - roughness) * (0.25f + 0.75f * metallic);
+
+        Vector3 result = albedo * diffuse + new Vector3(spec);
+        if (emissive > 0f)
+            result += emissiveColor * emissive;
+        return result;
+    }
 }

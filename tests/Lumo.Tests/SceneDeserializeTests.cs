@@ -41,4 +41,55 @@ public class SceneDeserializeTests
         // note: entity Ids are reassigned by the serializer's id counter,
         // so byte-stability across roundtrips is not guaranteed
     }
+
+    [Fact]
+    public void SerializeDeserialize_PreservesPbrMaterialParams()
+    {
+        var scene = new Scene { Name = "PBR" };
+        Entity box = scene.CreateEntity("GlowBox");
+        box.MeshRenderer = new MeshRendererComponent
+        {
+            MeshName = "Cube",
+            Color = new Vector3(0.9f, 0.1f, 0.1f),
+            Metallic = 0.85f,
+            Roughness = 0.25f,
+            Emissive = 0.6f,
+            EmissiveColor = new Vector3(1f, 0.5f, 0f),
+            NormalMap = "Assets/brick_n.png"
+        };
+
+        Scene restored = Scene.Deserialize(scene.Serialize());
+
+        MeshRendererComponent? mr = restored.FindByName("GlowBox")?.MeshRenderer;
+        Assert.NotNull(mr);
+        Assert.Equal(0.85f, mr!.Metallic, 3);
+        Assert.Equal(0.25f, mr.Roughness, 3);
+        Assert.Equal(0.6f, mr.Emissive, 3);
+        Assert.Equal(new Vector3(1f, 0.5f, 0f), mr.EmissiveColor);
+        Assert.Equal("Assets/brick_n.png", mr.NormalMap);
+    }
+
+    [Fact]
+    public void Deserialize_OldSceneWithoutPbrFields_UsesDefaults()
+    {
+        // A scene saved before PBR fields existed: no Metallic/Roughness keys.
+        const string json = """
+        {
+          "Name": "Old",
+          "Entities": [
+            { "Name": "Rock", "Id": 1,
+              "Transform": { "Position": [0,0,0], "Rotation": [0,0,0,1], "Scale": [1,1,1] },
+              "MeshRenderer": { "MeshName": "Cube", "IsVisible": true, "Color": [0.5,0.6,0.7] } }
+          ]
+        }
+        """;
+
+        MeshRendererComponent? mr = Scene.Deserialize(json).FindByName("Rock")?.MeshRenderer;
+        Assert.NotNull(mr);
+        Assert.Equal(0f, mr!.Metallic, 3);
+        Assert.Equal(0.7f, mr.Roughness, 3);   // component default
+        Assert.Equal(0f, mr.Emissive, 3);
+        Assert.Equal(Vector3.One, mr.EmissiveColor);
+        Assert.Null(mr.NormalMap);
+    }
 }

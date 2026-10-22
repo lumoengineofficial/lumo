@@ -7,31 +7,35 @@ using Lumo.Engine.Rendering.Abstractions;
 namespace Lumo.Engine.Assets;
 
 /// <summary>
-/// Parses glTF 2.0 (.gltf with external or embedded buffers) into a single
-/// merged Mesh. Very large models are reduced with vertex-cluster decimation
-/// so the software viewport stays interactive.
+/// Parses glTF 2.0 (.gltf with external/embedded buffers, or binary .glb)
+/// into a single merged Mesh. Very large models are reduced with vertex-cluster
+/// decimation so the software viewport stays interactive.
 /// </summary>
 public static class GltfImporter
 {
     /// <summary>Triangle budget after import; larger meshes are clustered down.</summary>
     public const int DefaultMaxTriangles = 25_000;
 
+    private const uint GlbMagic = 0x46546C67;        // 'glTF'
+    private const uint GlbChunkJson = 0x4E4F534A;    // 'JSON'
+    private const uint GlbChunkBin = 0x004E4942;     // 'BIN\0'
+
     public static Mesh Load(string path, int maxTriangles = DefaultMaxTriangles)
         => Load(path, out _, maxTriangles);
 
-    /// <summary>Loads a .gltf file; <paramref name="originalTriangles"/> reports the
+    /// <summary>Loads a .gltf or .glb file; <paramref name="originalTriangles"/> reports the
     /// pre-decimation triangle count so callers can log how much was reduced.</summary>
     public static Mesh Load(string path, out int originalTriangles, int maxTriangles = DefaultMaxTriangles)
     {
         if (!File.Exists(path))
             throw new FileNotFoundException("glTF file not found", path);
 
-        string json = File.ReadAllText(path);
+        (string json, byte[]? glbBin) = ReadDocument(path);
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
         string baseDir = Path.GetDirectoryName(Path.GetFullPath(path))!;
 
-        byte[][] buffers = ReadBuffers(root, baseDir);
+        byte[][] buffers = ReadBuffers(root, baseDir, glbBin);
         JsonElement[] views = root.TryGetProperty("bufferViews", out var vEl) ? vEl.EnumerateArray().ToArray() : [];
         JsonElement[] accessors = root.TryGetProperty("accessors", out var aEl) ? aEl.EnumerateArray().ToArray() : [];
         JsonElement[] meshes = root.TryGetProperty("meshes", out var mEl) ? mEl.EnumerateArray().ToArray() : [];
@@ -63,11 +67,13 @@ public static class GltfImporter
     }
 
     /// <summary>Relative URIs (buffers, images) a .gltf references — used to copy
-    /// the whole package (model + .bin + textures) into Assets/.</summary>
+    /// the whole package (model + .bin + textures) into Assets/. A .glb packs
+    /// everything internally, so it returns no URIs.</summary>
     public static IReadOnlyList<string> GetReferencedUris(string gltfPath)
     {
         var result = new List<string>();
-        using var doc = JsonDocument.Parse(File.ReadAllText(gltfPath));
+        (string json, _) = ReadDocument(gltfPath);
+        using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
         void Collect(string property)
@@ -89,8 +95,8 @@ public static class GltfImporter
     }
 
     /// <summary>
-    /// Registers every *.gltf under <paramref name="directory"/> (recursive) into
-    /// the MeshLibrary so saved scenes keep their models after a restart.
+    /// Registers every *.gltf and *.glb under <paramref name="directory"/> (recursive)
+    /// into the MeshLibrary so saved scenes keep their models after a restart.
     /// Broken files are skipped; returns the number of meshes registered.
     /// </summary>
     public static int RegisterDirectory(string directory)
@@ -98,7 +104,9 @@ public static class GltfImporter
         if (!Directory.Exists(directory)) return 0;
 
         int count = 0;
-        foreach (string file in Directory.GetFiles(directory, "*.gltf", SearchOption.AllDirectories))
+        var files = Directory.GetFiles(directory, "*.gltf", SearchOption.AllDirectories)
+            .Concat(Directory.GetFiles(directory, "*.glb", SearchOption.AllDirectories));
+        foreach (string file in files)
         {
             try
             {
@@ -113,6 +121,58 @@ public static class GltfImporter
         return count;
     }
 
+    // ---------- document loading (.gltf text / .glb container) ----------
+
+    /// <summary>Returns the JSON document of a .gltf or .glb, plus the GLB
+    /// binary chunk when the file is a binary glTF (null otherwise).</summary>
+    private static (string Json, byte[]? GlbBin) ReadDocument(string path)
+    {
+        if (!IsGlb(path))
+            return (File.ReadAllText(path), null);
+        return ReadGlb(path);
+    }
+
+    private static bool IsGlb(string path)
+    {
+        byte[] head = new byte[4];
+        using var fs = File.OpenRead(path);
+        return fs.Read(head, 0, 4) == 4
+            && head[0] == (byte)'g' && head[1] == (byte)'l'
+            && head[2] == (byte)'T' && head[3] == (byte)'F';
+    }
+
+    private static (string Json, byte[]? GlbBin) ReadGlb(string path)
+    {
+        byte[] bytes = File.ReadAllBytes(path);
+        if (bytes.Length < 12 || BinaryPrimitives.ReadUInt32LittleEndian(bytes) != GlbMagic)
+            throw new InvalidDataException("Not a GLB container: " + path);
+
+        string? json = null;
+        byte[]? bin = null;
+        int offset = 12;
+        while (offset + 8 <= bytes.Length)
+        {
+            int length = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset)));
+            uint type = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset + 4));
+            offset += 8;
+            if (length < 0 || offset + length > bytes.Length)
+                throw new InvalidDataException("Truncated GLB chunk: " + path);
+
+            if (type == GlbChunkJson)
+                json = Encoding.UTF8.GetString(bytes, offset, length);
+            else if (type == GlbChunkBin)
+            {
+                bin = new byte[length];
+                Buffer.BlockCopy(bytes, offset, bin, 0, length);
+            }
+            offset += length;
+        }
+
+        if (json == null)
+            throw new InvalidDataException("GLB has no JSON chunk: " + path);
+        return (json, bin);
+    }
+
     // ---------- base-color materials ----------
 
     private sealed class BaseColorTex
@@ -124,6 +184,11 @@ public static class GltfImporter
         public float Rotation;
         public bool ClampU;
         public bool ClampV;
+        /// <summary>pbrMetallicRoughness.baseColorFactor — multiplied into baked
+        /// vertex colors (spec: baseColor = texture × factor).</summary>
+        public Vector4 Factor = Vector4.One;
+
+        public bool IsWhite => Factor == Vector4.One;
     }
 
     private static BaseColorTex?[] ReadMaterials(JsonElement root, string baseDir, byte[][] buffers, JsonElement[] views)
@@ -138,48 +203,56 @@ public static class GltfImporter
         int mi = 0;
         foreach (var mat in matsEl.EnumerateArray())
         {
-            if (mat.TryGetProperty("pbrMetallicRoughness", out var pbr) &&
-                pbr.TryGetProperty("baseColorTexture", out var bct) &&
-                bct.TryGetProperty("index", out var texIdxEl))
+            var info = new BaseColorTex();
+            if (mat.TryGetProperty("pbrMetallicRoughness", out var pbr))
             {
-                int texIdx = texIdxEl.GetInt32();
-                var info = new BaseColorTex
+                if (pbr.TryGetProperty("baseColorFactor", out var fc))
                 {
-                    TexCoord = bct.TryGetProperty("texCoord", out var tc) ? tc.GetInt32() : 0,
-                };
-
-                if (bct.TryGetProperty("extensions", out var ext) &&
-                    ext.TryGetProperty("KHR_texture_transform", out var tr))
-                {
-                    if (tr.TryGetProperty("offset", out var off))
-                    {
-                        var o = ReadFloatArray(off, 2);
-                        info.Offset = new Vector2(o[0], o[1]);
-                    }
-                    if (tr.TryGetProperty("scale", out var sc))
-                    {
-                        var s2 = ReadFloatArray(sc, 2);
-                        info.Scale = new Vector2(s2[0], s2[1]);
-                    }
-                    if (tr.TryGetProperty("rotation", out var rot))
-                        info.Rotation = rot.GetSingle();
+                    var f = ReadFloatArray(fc, 4);
+                    info.Factor = f.Length >= 4 ? new Vector4(f[0], f[1], f[2], f[3]) : Vector4.One;
                 }
-
-                if ((uint)texIdx < (uint)textures.Length)
+                if (pbr.TryGetProperty("baseColorTexture", out var bct) &&
+                    bct.TryGetProperty("index", out var texIdxEl))
                 {
-                    var tex = textures[texIdx];
-                    if (tex.TryGetProperty("source", out var src) && src.GetInt32() < images.Length)
-                        info.Texture = LoadImage(images[src.GetInt32()], baseDir, buffers, views);
-                    if (tex.TryGetProperty("sampler", out var smp) && smp.GetInt32() < samplers.Length)
+                    int texIdx = texIdxEl.GetInt32();
+                    info.TexCoord = bct.TryGetProperty("texCoord", out var tc) ? tc.GetInt32() : 0;
+
+                    if (bct.TryGetProperty("extensions", out var ext) &&
+                        ext.TryGetProperty("KHR_texture_transform", out var tr))
                     {
-                        var sampler = samplers[smp.GetInt32()];
-                        info.ClampU = sampler.TryGetProperty("wrapS", out var wu) && wu.GetInt32() == 33071;
-                        info.ClampV = sampler.TryGetProperty("wrapT", out var wv) && wv.GetInt32() == 33071;
+                        if (tr.TryGetProperty("offset", out var off))
+                        {
+                            var o = ReadFloatArray(off, 2);
+                            info.Offset = new Vector2(o[0], o[1]);
+                        }
+                        if (tr.TryGetProperty("scale", out var sc))
+                        {
+                            var s2 = ReadFloatArray(sc, 2);
+                            info.Scale = new Vector2(s2[0], s2[1]);
+                        }
+                        if (tr.TryGetProperty("rotation", out var rot))
+                            info.Rotation = rot.GetSingle();
+                    }
+
+                    if ((uint)texIdx < (uint)textures.Length)
+                    {
+                        var tex = textures[texIdx];
+                        if (tex.TryGetProperty("source", out var src) && src.GetInt32() < images.Length)
+                            info.Texture = LoadImage(images[src.GetInt32()], baseDir, buffers, views);
+                        if (tex.TryGetProperty("sampler", out var smp) && smp.GetInt32() < samplers.Length)
+                        {
+                            var sampler = samplers[smp.GetInt32()];
+                            info.ClampU = sampler.TryGetProperty("wrapS", out var wu) && wu.GetInt32() == 33071;
+                            info.ClampV = sampler.TryGetProperty("wrapT", out var wv) && wv.GetInt32() == 33071;
+                        }
                     }
                 }
-
-                if (info.Texture != null) result[mi] = info;
             }
+
+            // Keep the entry when there is something to bake: a texture, or a
+            // non-white baseColorFactor (materials without either render as-is).
+            if (info.Texture != null || !info.IsWhite)
+                result[mi] = info;
             mi++;
         }
         return result;
@@ -355,7 +428,7 @@ public static class GltfImporter
 
     // ---------- accessor decoding ----------
 
-    private static byte[][] ReadBuffers(JsonElement root, string baseDir)
+    private static byte[][] ReadBuffers(JsonElement root, string baseDir, byte[]? glbBin)
     {
         if (!root.TryGetProperty("buffers", out var bufs)) return [];
 
@@ -363,7 +436,13 @@ public static class GltfImporter
         foreach (var b in bufs.EnumerateArray())
         {
             if (!b.TryGetProperty("uri", out var uriEl))
-                throw new NotSupportedException("glTF buffers without a URI (GLB binary chunk) are not supported.");
+            {
+                // Binary glTF: the URI-less buffer is the container's BIN chunk.
+                if (glbBin == null)
+                    throw new NotSupportedException("glTF buffers without a URI (GLB binary chunk) are not supported.");
+                result.Add(glbBin);
+                continue;
+            }
 
             string uri = uriEl.GetString() ?? "";
             if (uri.StartsWith("data:", StringComparison.Ordinal))
@@ -646,6 +725,9 @@ public static class GltfImporter
         public List<float> Colors { get; } = new(4096);
         public List<uint> Indices { get; } = new(4096);
         public bool HasTexture { get; private set; }
+        /// <summary>True when any primitive bakes color data (texture and/or
+        /// non-white baseColorFactor) — drives the VertexColors export.</summary>
+        public bool HasBakedColor { get; private set; }
         private bool _normalsComplete = true;
         private bool _uvComplete = true;
 
@@ -691,6 +773,7 @@ public static class GltfImporter
             }
 
             int vertexCount = pos.Length / 3;
+            var factor = bc?.Factor ?? Vector4.One;
             for (int i = 0; i < vertexCount; i++)
             {
                 float r = 1f, g = 1f, b = 1f, a = 1f;
@@ -699,12 +782,15 @@ public static class GltfImporter
                     var c = SampleTexture(tex, sampleUv[i * 2], sampleUv[i * 2 + 1], bc);
                     r = c.X; g = c.Y; b = c.Z; a = c.W;
                 }
+                // baseColor = texture sample × baseColorFactor (factor alone works too).
+                r *= factor.X; g *= factor.Y; b *= factor.Z; a *= factor.W;
                 Colors.Add(r);
                 Colors.Add(g);
                 Colors.Add(b);
                 Colors.Add(a);
             }
             if (tex != null) HasTexture = true;
+            if (tex != null || factor != Vector4.One) HasBakedColor = true;
 
             for (int i = 0; i < idx.Length; i++)
                 Indices.Add(offset + idx[i]);
@@ -752,7 +838,7 @@ public static class GltfImporter
                 mesh.Normals = [.. Normals];
             if (_uvComplete && TexCoords.Count == Positions.Count / 3 * 2)
                 mesh.TexCoords = [.. TexCoords];
-            if (HasTexture && Colors.Count == Positions.Count / 3 * 4)
+            if (HasBakedColor && Colors.Count == Positions.Count / 3 * 4)
                 mesh.VertexColors = [.. Colors];
             mesh.HasTexture = HasTexture;
             return mesh;
