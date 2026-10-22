@@ -133,7 +133,7 @@ public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
         }
         _selectedEntity = _scene.AllEntities.FirstOrDefault();
 
-        // Models imported earlier live as .obj / .gltf under Assets/ — re-register
+        // Models imported earlier live as .obj / .gltf / .glb under Assets/ — re-register
         // them so MeshRenderer components keep resolving after a restart.
         string assetsDir = Path.Combine(_project.Path, "Assets");
         int meshes = ObjImporter.RegisterDirectory(assetsDir) + GltfImporter.RegisterDirectory(assetsDir);
@@ -587,7 +587,7 @@ public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
 
         var importBtn = new Button
         {
-            Content = UiTheme.Txt("Import 3D Model (.obj / .gltf)…", 11, UiTheme.Text),
+            Content = UiTheme.Txt("Import 3D Model (.obj / .gltf / .glb)…", 11, UiTheme.Text),
             Background = UiTheme.B(UiTheme.Panel),
             BorderBrush = UiTheme.B(UiTheme.Border),
             BorderThickness = new Thickness(1),
@@ -600,7 +600,7 @@ public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
         stack.Children.Add(importBtn);
 
         stack.Children.Add(UiTheme.TxtAt(
-            "Copies the file (and a glTF's .bin/textures) to Assets/, registers the mesh and spawns an entity. Click an .obj or .gltf in the FileSystem panel to import it too.",
+            "Copies the file (and a glTF's .bin/textures) to Assets/, registers the mesh and spawns an entity. Click an .obj, .gltf or .glb in the FileSystem panel to import it too.",
             10, UiTheme.Faint, FontWeight.Normal, HorizontalAlignment.Left));
 
         stack.Children.Add(UiTheme.Txt("Registered meshes", 11, UiTheme.Dim));
@@ -821,7 +821,7 @@ public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
                 var ext = Path.GetExtension(path).ToLowerInvariant();
                 if (ext == ".cs") { OpenScript(path); SetTopMode("Script"); }
                 else if (ext == ".obj") ImportObjFile(path);
-                else if (ext == ".gltf") ImportGltfFile(path);
+                else if (ext == ".gltf" || ext == ".glb") ImportGltfFile(path);
                 else Log($"Opened {Path.GetFileName(path)}");
                 RefreshFileTree();
             };
@@ -1143,6 +1143,7 @@ public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
         {
             if (entity.MeshRenderer != null)
             {
+                PushSceneUndo();
                 entity.MeshRenderer.IsVisible = !entity.MeshRenderer.IsVisible;
                 Log($"{entity.Name}: {(entity.MeshRenderer.IsVisible ? "visible" : "hidden")}");
             }
@@ -1353,6 +1354,34 @@ public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
             InsRow(s, "Mesh", e.MeshRenderer.MeshName ?? "None");
             InsRow(s, "Visible", e.MeshRenderer.IsVisible ? "Yes" : "No");
             _inspectorContent.Children.Add(s);
+
+            var mr = e.MeshRenderer;
+            var mat = InsSection("Material");
+            InsRow(mat, "Color", $"#{ColorFromVec(mr.Color)}");
+            Vec3Row(mat, "Color RGB", mr.Color.X, mr.Color.Y, mr.Color.Z,
+                (axis, val) =>
+                {
+                    PushSceneUndo();
+                    var c = mr.Color;
+                    if (axis == 0) c.X = Math.Clamp(val, 0, 1); else if (axis == 1) c.Y = Math.Clamp(val, 0, 1); else c.Z = Math.Clamp(val, 0, 1);
+                    mr.Color = c;
+                    AfterTransformEdit();
+                });
+            FloatRow(mat, "Metallic", mr.Metallic, v => { PushSceneUndo(); mr.Metallic = Math.Clamp(v, 0, 1); AfterTransformEdit(); });
+            FloatRow(mat, "Roughness", mr.Roughness, v => { PushSceneUndo(); mr.Roughness = Math.Clamp(v, 0, 1); AfterTransformEdit(); });
+            FloatRow(mat, "Emissive", mr.Emissive, v => { PushSceneUndo(); mr.Emissive = Math.Clamp(v, 0, 1); AfterTransformEdit(); });
+            Vec3Row(mat, "Emissive RGB", mr.EmissiveColor.X, mr.EmissiveColor.Y, mr.EmissiveColor.Z,
+                (axis, val) =>
+                {
+                    PushSceneUndo();
+                    var c = mr.EmissiveColor;
+                    if (axis == 0) c.X = Math.Clamp(val, 0, 1); else if (axis == 1) c.Y = Math.Clamp(val, 0, 1); else c.Z = Math.Clamp(val, 0, 1);
+                    mr.EmissiveColor = c;
+                    AfterTransformEdit();
+                });
+            InsRow(mat, "Normal Map", string.IsNullOrEmpty(mr.NormalMap) ? "None" : mr.NormalMap);
+            mat.Children.Add(ActionSmall("Set Normal Map…", () => _ = AssignNormalMapAsync(e)));
+            _inspectorContent.Children.Add(mat);
         }
         if (e.Light != null)
         {
@@ -1499,6 +1528,86 @@ public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
         Add(1, "Y", y, Color.Parse("#66c266"), 1);
         Add(2, "Z", z, Color.Parse("#6699e6"), 2);
         section.Children.Add(grid);
+    }
+
+    private static string ColorFromVec(System.Numerics.Vector3 c)
+    {
+        static byte B(float v) => (byte)Math.Clamp(v * 255f, 0, 255);
+        return $"{B(c.X):X2}{B(c.Y):X2}{B(c.Z):X2}";
+    }
+
+    /// <summary>Single editable 0..1 float field row (Enter/LostFocus commits).</summary>
+    private static void FloatRow(StackPanel section, string label, float value, Action<float> commit)
+    {
+        var box = new TextBox
+        {
+            Text = value.ToString("F2", CultureInfo.InvariantCulture),
+            FontSize = 11,
+            Foreground = UiTheme.B(UiTheme.Text),
+            CaretBrush = UiTheme.B(UiTheme.Text),
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+            MinWidth = 44,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        bool committed = false;
+        void TryCommit()
+        {
+            if (committed) return;
+            if (!float.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var nv)) return;
+            if (MathF.Abs(nv - value) < 1e-4f) return;
+            committed = true;
+            commit(nv);
+        }
+        box.KeyDown += (_, ke) => { if (ke.Key == Key.Enter) { TryCommit(); ke.Handled = true; } };
+        box.LostFocus += (_, _) => TryCommit();
+
+        section.Children.Add(new DockPanel
+        {
+            Margin = new Thickness(12, 3),
+            Children = { box, UiTheme.Txt(label, 11, UiTheme.Dim) }
+        });
+    }
+
+    private async System.Threading.Tasks.Task AssignNormalMapAsync(Entity e)
+    {
+        try
+        {
+            var topLevel = TopLevel.GetTopLevel(this);
+            if (topLevel == null) { Log("No top level for file dialog."); return; }
+            var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Import Normal Map",
+                AllowMultiple = false,
+                FileTypeFilter =
+                [
+                    new FilePickerFileType("Images") { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.bmp"] },
+                    new FilePickerFileType("All Files") { Patterns = ["*.*"] },
+                ],
+            });
+            if (files.Count == 0) { Log("Import cancelled."); return; }
+            var path = files[0].TryGetLocalPath();
+            if (path == null) { Log("Could not resolve file path."); return; }
+
+            var assetsDir = Path.Combine(_project.Path, "Assets");
+            Directory.CreateDirectory(assetsDir);
+            var dest = Path.Combine(assetsDir, Path.GetFileName(path));
+            if (!string.Equals(Path.GetFullPath(path), Path.GetFullPath(dest), StringComparison.OrdinalIgnoreCase))
+            {
+                if (File.Exists(dest))
+                    dest = UniqueAssetPath(assetsDir, Path.GetFileNameWithoutExtension(path), Path.GetExtension(path));
+                File.Copy(path, dest);
+            }
+
+            PushSceneUndo();
+            e.MeshRenderer!.NormalMap = "Assets/" + Path.GetFileName(dest);
+            SaveProject();
+            RefreshInspector();
+            _softwareViewport?.InvalidateVisual();
+            Log($"Normal map set: {e.MeshRenderer.NormalMap}");
+        }
+        catch (Exception ex) { Log($"Normal map import failed: {ex.Message}"); }
     }
 
     private static Button ActionSmall(string label, Action act, bool primary = false)
@@ -1786,8 +1895,9 @@ public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
     {
         if (_selectedEntity == null) { Log("Select an entity first."); return; }
         _selectedEntity.Scripts ??= new Lumo.Engine.Scripting.ScriptComponent();
-        if (!_selectedEntity.Scripts.ScriptNames.Contains(className))
-            _selectedEntity.Scripts.ScriptNames.Add(className);
+        if (_selectedEntity.Scripts.ScriptNames.Contains(className)) return;
+        PushSceneUndo();
+        _selectedEntity.Scripts.ScriptNames.Add(className);
         RefreshInspector();
         Log($"Attached {className} to {_selectedEntity.Name}");
     }
@@ -1949,8 +2059,11 @@ public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
     {
         try
         {
+            string? selName = _selectedEntity?.Name;
             _scene = SceneType.Deserialize(json);
-            _selectedEntity = null;
+            // Entity ids are reassigned on deserialize — restore selection by name.
+            _selectedEntity = selName is null ? null
+                : _scene.AllEntities.FirstOrDefault(e => e.Name == selName);
             RefreshHierarchy();
             RefreshInspector();
         }
@@ -2099,7 +2212,7 @@ public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
                 AllowMultiple = false,
                 FileTypeFilter =
                 [
-                    new FilePickerFileType("3D Models") { Patterns = ["*.obj", "*.gltf"] },
+                    new FilePickerFileType("3D Models") { Patterns = ["*.obj", "*.gltf", "*.glb"] },
                     new FilePickerFileType("All Files") { Patterns = ["*.*"] },
                 ],
             });
@@ -2110,10 +2223,10 @@ public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
 
             string ext = Path.GetExtension(path).ToLowerInvariant();
             if (ext == ".obj") ImportObjFile(path);
-            else if (ext == ".gltf") ImportGltfFile(path);
+            else if (ext == ".gltf" || ext == ".glb") ImportGltfFile(path);
             else
             {
-                Log($"Unsupported format: {ext} (OBJ/glTF supported).");
+                Log($"Unsupported format: {ext} (OBJ/glTF/GLB supported).");
                 return;
             }
         }
@@ -2152,6 +2265,7 @@ public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
                 File.Copy(path, dest);
             }
 
+            PushSceneUndo();
             e.SpriteRenderer ??= new SpriteRendererComponent();
             e.SpriteRenderer.SpritePath = "Assets/" + Path.GetFileName(dest);
             SaveProject();
@@ -2209,8 +2323,9 @@ public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
             if (Directory.Exists(path))
             {
                 // The picked "file" is a package folder — take the model inside it.
-                string? inside = Directory.GetFiles(path, "*.gltf", SearchOption.TopDirectoryOnly).FirstOrDefault();
-                if (inside == null) { Log("No .gltf found in that folder."); return; }
+                string? inside = Directory.GetFiles(path, "*.gltf", SearchOption.TopDirectoryOnly).FirstOrDefault()
+                    ?? Directory.GetFiles(path, "*.glb", SearchOption.TopDirectoryOnly).FirstOrDefault();
+                if (inside == null) { Log("No .gltf/.glb found in that folder."); return; }
                 path = inside;
             }
 
@@ -2249,7 +2364,7 @@ public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
             PushSceneUndo();
             var entity = _scene.CreateEntity(mesh.Name);
             entity.MeshRenderer = new MeshRendererComponent { MeshName = mesh.Name };
-            if (mesh.HasTexture)
+            if (mesh.HasTexture || mesh.VertexColors.Length > 0)
                 entity.MeshRenderer.Color = System.Numerics.Vector3.One;
 
             _selectedEntity = entity;
@@ -2272,6 +2387,32 @@ public partial class WorkView : UserControl, Lumo.Plugins.IHostBridge
         if (e.Key == Key.F && !ctrl)
         {
             FocusSelectedEntity();
+            e.Handled = true;
+            return;
+        }
+        if (ctrl && e.Key == Key.S)
+        {
+            SaveProject();
+            _graphsPanel?.SaveCurrentGraph();
+            Log("Project saved. (Ctrl+S)");
+            e.Handled = true;
+            return;
+        }
+        if (ctrl && e.Key == Key.D && !e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+        {
+            DuplicateSelected();
+            e.Handled = true;
+            return;
+        }
+        if (e.Key == Key.F5 && !ctrl)
+        {
+            TogglePlay();
+            e.Handled = true;
+            return;
+        }
+        if (e.Key == Key.Delete && !ctrl && _topMode != "Graphs")
+        {
+            DeleteSelected();
             e.Handled = true;
             return;
         }
