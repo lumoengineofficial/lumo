@@ -28,10 +28,9 @@ Listed with file references so they are easy to pick up. Report new ones at
    rules can leave the game behind the editor. Click its taskbar entry.
 5. **Loading-screen hint always says "Left click shoot"**
    (`GameView.cs:482`) even for games with no shooting (e.g. Wildlands).
-6. **Game Export requires a dev checkout** — `GameExporter.FindRuntimeProject`
-   (`src/Lumo.Editor/Export/GameExporter.cs:128`) walks up to find
-   `src/Lumo.Runtime/Lumo.Runtime.csproj`, so exporting from an installed /
-   zipped editor reports "dev layout required". Export from source instead.
+6. ~~**Game Export requires a dev checkout**~~ **Fixed**: the exporter now falls
+   back to an installed/published Lumo.Runtime output when no source checkout is
+   present, so installed or zipped editors can export standalone games.
 7. **Editor UI is Windows-only** (Avalonia works on Linux/macOS but is only
    tested on Windows); Linux is supported for headless export and tests.
 

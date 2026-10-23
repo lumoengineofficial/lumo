@@ -24,6 +24,35 @@ public class ExportTests
     }
 
     [Fact]
+    public void FindPublishedRuntimeRoot_ReturnsNullWhenNoPublishedLayoutExists()
+    {
+        string missing = Path.Combine(Path.GetTempPath(), "lumo-no-such-" + Guid.NewGuid().ToString("N"));
+
+        Assert.Null(GameExporter.FindPublishedRuntimeRoot(missing));
+    }
+
+    [Fact]
+    public void FindPublishedRuntimeRoot_FindsPublishedLayout()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "lumo-pub-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "Lumo.Runtime.dll"), "stub");
+        File.WriteAllText(Path.Combine(root, "Lumo.Runtime.deps.json"), "{}");
+        File.WriteAllText(Path.Combine(root, "Lumo.Runtime.runtimeconfig.json"), "{}");
+        try
+        {
+            string? found = GameExporter.FindPublishedRuntimeRoot(root);
+
+            Assert.NotNull(found);
+            Assert.Equal(Path.GetFullPath(root), Path.GetFullPath(found!));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void OutputDir_UsesSanitizedProjectNameAndTargetId()
     {
         string dir = GameExporter.OutputDir(
